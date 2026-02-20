@@ -12,7 +12,7 @@ from astrbot.api.message_components import *
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, register
 
-@register("endworld_img_api", "随机图源", "发送重试机制+原图优先+多指令分流。", "4.9")
+@register("endworld_img_api", "随机图片", "发送重试机制+原图优先+多指令分流。", "4.9")
 class SetuPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
