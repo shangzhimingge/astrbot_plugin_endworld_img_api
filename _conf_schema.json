@@ -1,9 +1,73 @@
 {
-    "api_url": {
-        "description": "随机图片API地址",
-        "type": "string",
-        "hint": "填写获取随机图片的API地址",
-        "default": "",
-        "obvious_hint": true
+    "sources": {
+        "type": "template_list",
+        "description": "图源配置列表",
+        "hint": "管理多个不同的图源规则",
+        "default": [
+            {
+                "__template_key": "default_source",
+                "name": "默认随机图",
+                "keywords": ["涩涩", "来点图"],
+                "apis": ["https://api.example.com/img"]
+            }
+        ],
+        "templates": {
+            "default_source": {
+                "name": "图源配置",
+                "hint": "创建一个新的图源规则",
+                "items": {
+                    "name": {
+                        "type": "string",
+                        "description": "配置名称",
+                        "default": "新图源"
+                    },
+                    "keywords": {
+                        "type": "list",
+                        "description": "触发指令列表",
+                        "default": ["涩涩"]
+                    },
+                    "apis": {
+                        "type": "list",
+                        "description": "API 链接列表",
+                        "default": []
+                    }
+                }
+            }
+        }
+    },
+    "send_retries": {
+        "type": "int",
+        "description": "发送失败重试次数",
+        "hint": "网络波动会导致发送失败，重试通常能解决问题。建议设置 3 次。",
+        "default": 3,
+        "minimum": 0,
+        "maximum": 10
+    },
+    "compress_enable": {
+        "type": "bool",
+        "description": "开启大图自动压缩",
+        "default": true
+    },
+    "compress_threshold": {
+        "type": "int",
+        "description": "压缩阈值 (MB)",
+        "hint": "图片超过此大小时才压缩。若想发原图，可设为 50 或 100。",
+        "default": 5,
+        "minimum": 1
+    },
+    "compress_quality": {
+        "type": "int",
+        "description": "压缩质量 (1-100)",
+        "default": 85
+    },
+    "cooldown": {
+        "type": "int",
+        "description": "全局指令冷却时间 (秒)",
+        "default": 10
+    },
+    "verify_ssl": {
+        "type": "bool",
+        "description": "验证 SSL 证书",
+        "default": false
     }
 }
