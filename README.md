@@ -1,7 +1,7 @@
 # 🖼️ 随机图源 (Random Image Source)
 
 一个为AstrBot打造的随机图片分发插件。
-本插件从原 mccloud_img 分支派生，经历了彻底的底层重构，从单一的图片获取工具，进化为**支持多指令分流、智能防超时、全网 API 兼容**的高级图片引擎。
+本插件从原 (https://github.com/MCYUNIDC/mccloud_img) 分支派生，经历了彻底的底层重构，从单一的图片获取工具，进化为**支持多指令分流、智能防超时、全网 API 兼容**的高级图片引擎。
 
 <img width="1408" height="768" alt="image_32ea64a6-9111-4b89-81c3-1bfa96a0b14d" src="https://github.com/user-attachments/assets/41571144-81f9-4003-9039-530dba2e809f" />
 
@@ -28,7 +28,7 @@
 
 ## 📦 安装方法
 
-1. 下载插件代码压缩包，解压后重命名文件夹为 `endworld_img_api`。
+1. 下载插件代码压缩包，解压后重命名文件夹为 `astrbot_plugin_endworld_img_api`。
 2. 将文件夹放置于 AstrBot 的 `data/plugins/` 目录下。
 3. 安装额外的 Python 依赖库（在终端运行）：
    ```bash
@@ -41,7 +41,7 @@
 ## 🚀 使用说明 & 配置指南
 
 ### 1. 添加图源
-进入 AstrBot 管理后台 -> 插件配置 -> 找到 `endworld_img_api`。
+进入 AstrBot 管理后台 -> 插件配置 -> 找到 `astrbot_plugin_endworld_img_api`。
 * 点击 **“添加 单条规则”**。
 * **规则名称**：随便起，如“随机涩涩”。
 * **触发指令**：输入你想要的触发词，多个用逗号分隔（如 `涩涩, 猫猫`）。
