@@ -1,9 +1,3 @@
-这里是为您添加了 **更新日志 (Changelog)** 章节的完整 `README.md`。我将我们在开发过程中从 v1.0 到 v5.6 经历的所有重要迭代都整理成了清晰的日志，方便用户了解插件的进化过程。
-
-请直接复制并替换您当前的 `README.md`：
-
----
-
 # 🖼️ 随机图片 (Random Image)
 
 [![Version](https://img.shields.io/badge/version-v5.6-blue.svg)](https://github.com/YourUsername/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.11.4-orange.svg)](https://github.com/Soulter/AstrBot) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
