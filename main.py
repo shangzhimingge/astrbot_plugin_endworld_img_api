@@ -202,12 +202,12 @@ class SetuPlugin(Star):
         user_id = event.get_sender_id()
         remaining = self._check_cooldown(user_id)
         if remaining > 0:
-            yield event.plain_result(self._text(f"冲太快了！请休息 {int(remaining)} 秒再试。"))
+            yield event.plain_result(self._text(f"冲太快了！请休息 {int(remaining)} 秒再试"))
             return
         
         target_apis = matched_source.get("apis", [])
         if not target_apis:
-            yield event.plain_result(self._text(f"⚠️ 图源 [{matched_source.get('name')}] 未配置 API 地址。"))
+            yield event.plain_result(self._text(f"图源 [{matched_source.get('name')}] 未配置 API 地址"))
             return
 
         success = await self._process_and_send(event, target_apis, matched_source)
@@ -299,7 +299,7 @@ class SetuPlugin(Star):
                         
                         return True
                     else:
-                        fallback_msg = self._text(f"⚠️ 发送失败(重试{max_retries}次)，原图直链：\n{final_url}")
+                        fallback_msg = self._text(f"发送失败(重试{max_retries}次)，原图直链：\n{final_url}")
                         await event.send(MessageChain([Plain(fallback_msg)]))
                         return False
 
@@ -313,5 +313,5 @@ class SetuPlugin(Star):
                             except: pass
                         asyncio.create_task(delayed_delete(temp_file_path))
             else:
-                await event.send(MessageChain([Plain(self._text("😵 所有图源均无法连接，或已被屏蔽。"))]))
+                await event.send(MessageChain([Plain(self._text("图片获取失败"))]))
                 return False
