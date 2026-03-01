@@ -1,6 +1,6 @@
 # 🖼️ 随机图片 (Random Image)
 
-[![Version](https://img.shields.io/badge/version-v5.7.1-blue.svg)](https://github.com/YourUsername/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.11.4-orange.svg)](https://github.com/Soulter/AstrBot) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/version-v5.8.0-blue.svg)](https://github.com/YourUsername/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.11.4-orange.svg)](https://github.com/Soulter/AstrBot) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
 一个为 AstrBot 打造的自定义 API 获取随机图片分发插件。
 本插件从原 [(https://github.com/MCYUNIDC/mccloud_img)](https://github.com/MCYUNIDC/mccloud_img) 分支派生，经历了彻底的底层重构，从单一的图片获取工具，进化为**支持多指令分流、合并转发防吞、精细化分群管理、阅后即焚与安全防护**的高级图片引擎。
@@ -9,13 +9,13 @@
 
 ## 🌟 功能特点一览
 
-*   **🌐 全能 API 兼容**：内置智能 JSON 寻址算法，自动提取真实图片地址；完美兼容 302 跳转直链与纯图片流。
-*   **🎛️ 强大的 Web 可视化配置**：基于 AstrBot 最新架构，在后台只需点击“添加”，即可轻松配置多组指令与 API。
-*   **🛡️ 分群黑白名单**：单个图源独立管控，黑名单绝不响应，白名单专属特供。
-*   **📦 合并转发伪装兜底**：图片发送支持开启合并转发；而**兜底的源站直链将被强制转为合并转发消息**，最大程度保护群聊生态安全。
-*   **👻 双重自动撤回机制**：向撤回失败说再见。绕过封装直达底层协议，发送与撤回如丝般顺滑。
-*   **⚡ 自动压缩防超时**：内置 `Pillow` 引擎，自定义“压缩阈值”，突破 QQ 协议端大图发不出的瓶颈。
-*   **🐱 趣味猫娘模式**：开启互动开关，所有提示文本末尾自动追加自定义后缀词（如“喵~”）。
+* **🌐 全能 API 兼容与自动轮询**：内置智能 JSON 寻址算法，完美兼容 302 跳转直链与纯图片流。若当前 API 图片发送失败，**自动静默尝试配置中的下一个 API**，极大提升出图成功率。
+* **🎛️ 强大的 Web 可视化配置**：基于 AstrBot 最新架构，在后台只需点击“添加”，即可轻松配置多组指令与多个备用 API。
+* **🛡️ 分群黑白名单**：单个图源独立管控，黑名单绝不响应，白名单专属特供。
+* **📦 终极合并转发伪装兜底**：图片发送支持开启合并转发；而当**所有 API 均尝试失败后**，最后有效源站直链将被强制转为合并转发消息作为兜底，最大程度保护群聊生态安全。
+* **👻 双重自动撤回机制**：向撤回失败说再见。绕过封装直达底层协议，发送与撤回如丝般顺滑。
+* **⚡ 自动压缩防超时**：内置 `Pillow` 引擎，自定义“压缩阈值”，突破 QQ 协议端大图发不出的瓶颈。
+* **🐱 趣味猫娘模式**：开启互动开关，所有提示文本末尾自动追加自定义后缀词（如“喵~”）。
 
 ---
 
@@ -76,7 +76,10 @@
 ---
 
 ## 📝 更新日志 (Changelog)
-
+*   **v5.8.0**
+    *   ✨ **多图源自动轮询机制**：当某个 API 获取的图片发送失败时（可能遭遇风控或格式问题），不再立即触发直链兜底，而是**自动尝试该规则下的下一个 API**。
+    *   🛡️ **终极兜底逻辑优化**：只有当配置的所有 API 都尝试完毕且全数发送失败后，才会提取最后一次成功的直链，强制包装为合并转发消息发出。
+    *   🐛 修复了部分异步任务调用的语法问题，延长本地临时文件缓存清理时间至 30 秒以确保高延迟下的稳定发送。
 *   **v5.7.1**
     *   🛡️ **风控安全大升级：发送图片失败后的兜底直链更改为【强制合并转发】，彻底解决群内直发外部链接导致群聊被风控或封号的风险。**
     *   ✨ 新增独立图源【合并转发发送】选项，允许用户将正常图片也包装在聊天记录卡片中发出，极大降低图片被平台吞没的概率。
@@ -103,7 +106,7 @@
 
 ## 🛠️ 开发维护
 
-* **版本号**：v5.7.1 (Pro Edition)
+* **版本号**：v5.8.0 (Pro Edition)
 * **衍生自**：[mccloud_img](https://github.com/MCYUNIDC/mccloud_img) (Author: MC云)
 * **当前重构作者**：殇之冥歌
 * **核心依赖**：`AstrBot Core v4.11.4+`
