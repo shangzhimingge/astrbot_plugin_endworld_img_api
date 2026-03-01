@@ -203,32 +203,41 @@ class SetuPlugin(Star):
         
         use_forward = source_cfg.get("use_forward", False)
         max_retries = self.cfg.get("send_retries", 3)
-        
+        last_final_url = "" # 用于记录最后一个尝试成功的直链
+
         async with aiohttp.ClientSession(connector=ssl_context) as session:
             for idx, api_url in enumerate(api_list):
                 api_url = str(api_url).strip()
                 if not api_url: continue
 
                 temp_file_path = None
-
                 try:
+                    # 获取图片数据
                     body, ctype, final_url = await self._safe_fetch(session, api_url)
                     if not body: continue
+                    last_final_url = final_url 
 
+                    # JSON 解析处理
                     if "application/json" in ctype:
                         try:
                             data = json.loads(body.decode('utf-8'))
                             real_img_url = self._extract_url_from_json(data)
                             if real_img_url:
                                 body, ctype, final_url = await self._safe_fetch(session, real_img_url)
+                                if body: last_final_url = final_url
                         except Exception: continue
                             
                     if not body: continue
+
+                    # 文本直链处理
                     if "text" in ctype and len(body) < 2000 and body.startswith(b"http"):
                         real_url = body.decode('utf-8').strip()
                         body, ctype, final_url = await self._safe_fetch(session, real_url)
+                        if body: last_final_url = final_url
+                    
                     if not body: continue
 
+                    # 压缩与保存
                     body = self._compress_image(body)
                     file_ext = "jpg" 
                     if body[0:4] == b'\x89PNG': file_ext = "png"
@@ -240,24 +249,25 @@ class SetuPlugin(Star):
                     async with aiofiles.open(temp_file_path, "wb") as f:
                         await f.write(body)
 
+                    # 尝试发送图片
                     send_success = False
                     send_ret = None
-                    
-                    # 构建本地图片对象
                     file_uri = Path(temp_file_path).absolute().as_uri()
                     obmsg_img = [{'type': 'image', 'data': {'file': file_uri}}]
                     fallback_chain_img = MessageChain([Image.fromFileSystem(temp_file_path)])
 
-                    # 尝试发送图片
                     for attempt in range(max_retries + 1):
                         try:
                             send_ret = await self._send_advanced(event, obmsg_img, fallback_chain_img, use_forward)
-                            send_success = True
-                            break 
-                        except Exception:
+                            if send_ret: 
+                                send_success = True
+                                break 
+                        except Exception as e:
+                            logger.warning(f"[随机图片] 第 {attempt+1} 次发送尝试失败: {e}")
                             await asyncio.sleep(1)
 
                     if send_success:
+                        # 成功发送后的撤回逻辑
                         recall_delay = int(source_cfg.get("recall_delay", 0)) if source_cfg.get("recall_delay") else 0
                         if recall_delay > 0:
                             rets_to_recall = [send_ret]
@@ -268,16 +278,13 @@ class SetuPlugin(Star):
                                 notice_ret = await self._send_advanced(event, obmsg_text, notice_chain, use_forward)
                                 if notice_ret: rets_to_recall.append(notice_ret)
                             except Exception: pass
+                            # 修复后的行：
                             asyncio.create_task(self._recall_msgs(event, rets_to_recall, recall_delay))
                         return True
                     
-                    # 如果发图失败，执行兜底：发送直链（为了防拦截，兜底强制使用合并转发）
-                    fallback_msg = self._text(f"图片发送失败，提供原图直链：\n{final_url}")
-                    obmsg_text = [{'type': 'text', 'data': {'text': fallback_msg}}]
-                    fallback_chain_text = MessageChain([Plain(fallback_msg)])
-                    
-                    await self._send_advanced(event, obmsg_text, fallback_chain_text, use_forward=True)
-                    return False
+                    # 发送失败，继续循环
+                    logger.error(f"[随机图片] API {api_url} 图片发送失败，尝试下一个图源...")
+                    continue 
 
                 except Exception as e:
                     logger.error(f"处理图源时出现异常: {e}")
@@ -285,10 +292,18 @@ class SetuPlugin(Star):
                 finally:
                     if temp_file_path and os.path.exists(temp_file_path):
                         async def delayed_delete(path):
-                            await asyncio.sleep(15) 
+                            await asyncio.sleep(30)
                             try: os.remove(path)
                             except: pass
                         asyncio.create_task(delayed_delete(temp_file_path))
+            
+            # 最终兜底
+            if last_final_url:
+                fallback_msg = self._text(f"图片发送失败（已尝试所有API），提供原图直链：\n{last_final_url}")
+                obmsg_text = [{'type': 'text', 'data': {'text': fallback_msg}}]
+                fallback_chain_text = MessageChain([Plain(fallback_msg)])
+                await self._send_advanced(event, obmsg_text, fallback_chain_text, use_forward=True)
+                return True
             else:
                 await event.send(MessageChain([Plain(self._text("所有图源均无法连接，或已被屏蔽"))]))
                 return False
