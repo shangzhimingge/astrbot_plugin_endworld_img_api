@@ -65,6 +65,26 @@
             }
         }
     },
+    "batch_force_forward": {
+        "type": "bool",
+        "description": "批量获取强制合并转发",
+        "hint": "开启后，无论请求多少张图片，都将合并为一条聊天记录发送（不影响独立图源中的开启设置）",
+        "default": false
+    },
+    "batch_forward_threshold": {
+        "type": "int",
+        "description": "批量合并转发阈值",
+        "hint": "当一次性请求的图片数量大于等于此值时，自动转为合并转发（防刷屏）",
+        "default": 3,
+        "minimum": 2
+    },
+    "batch_max_count": {
+        "type": "int",
+        "description": "单次最大获取张数",
+        "hint": "限制单个用户一次请求的最高图片数量",
+        "default": 10,
+        "minimum": 1
+    },
     "catgirl_enable": {
         "type": "bool",
         "description": "开启猫娘模式",
