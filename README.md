@@ -3,13 +3,12 @@
 [![Version](https://img.shields.io/badge/version-v5.9.0-blue.svg)](https://github.com/YourUsername/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.11.4-orange.svg)](https://github.com/Soulter/AstrBot) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
 一个为 AstrBot 打造的自定义 API 获取随机图片分发插件。
-本插件从原 [(https://github.com/MCYUNIDC/mccloud_img)](https://github.com/MCYUNIDC/mccloud_img) 分支派生，经历了彻底的底层重构，从单一的图片获取工具，进化为**支持批量获取、智能重新抽卡、API动态轮询、动态合并转发防吞、精细化分群管理、阅后即焚与安全防护**的高级图片引擎。
 
 <img width="1408" height="768" alt="image_602ec539-0c6a-426f-877a-8dcd374be08c" src="https://github.com/user-attachments/assets/8a5c7712-ff32-44d3-b051-7b881f3e16a2" />
 
 ## 🌟 功能特点一览
 
-* **🚀 批量获取与动态合并**：支持通过 `指令 + 空格 + 数量`（如 `涩涩 5`）一次性获取多张图片！内置智能阈值防刷屏，超过设定张数自动打包为合并转发。
+* **🚀 批量获取与动态合并**：支持通过 `指令 + 空格 + 数量`（如 `涩涩 5`）一次性获取多张图片，内置智能阈值防刷屏，超过设定张数自动打包为合并转发。
 * **🎲 智能重新抽卡防拦截**：遭遇 QQ 风控或死链导致发送失败时，不再死磕废图，而是**自动向 API 重新抽卡获取新图发送**，极大提升出图成功率和连贯性。
 * **🌐 全能 API 兼容与破除缓存**：内置智能 JSON 寻址；并独家加入动态时间戳与浏览器 UA 伪装，**彻底解决 CDN 缓存导致的“每次都抽到同一张图”的痛点**。
 * **🎛️ 强大的 Web 可视化配置**：基于 AstrBot 最新架构，多组指令、分群黑白名单、撤回时间均可独立配置。
