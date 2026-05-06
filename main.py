@@ -8,6 +8,7 @@ import aiofiles
 import ipaddress
 import ssl
 import socket
+import mimetypes
 from io import BytesIO
 from urllib.parse import urlparse, urljoin
 from pathlib import Path 
@@ -18,7 +19,7 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger 
 
-@register("mccloud_img", "随机图片", "支持批量并发获取、轮询抽卡防拦截、双重撤回与直链兜底的高性能版。", "6.3.0")
+@register("mccloud_img", "随机图片", "支持批量并发获取、轮询抽卡防拦截、双重撤回与直链兜底的高性能版。", "6.4.0")
 class SetuPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -29,15 +30,23 @@ class SetuPlugin(Star):
         if not self.cache_dir.exists():
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             
-        # 优化 3 & 5: 声明全局会话和 SSL 上下文容器，推迟到异步上下文中惰性初始化
         self._session: aiohttp.ClientSession | None = None
         self._ssl_context: ssl.SSLContext | None = None
+        
+        # 优化 2: 维护后台任务的强引用，防止被 GC 意外回收
+        self._background_tasks = set()
 
-    # 获取全局复用的 ClientSession，开启 TCP 连接池复用
+    # 优化 3: 提供生命周期终止钩子，优雅释放 ClientSession 资源
+    def terminate(self):
+        if self._session and not self._session.closed:
+            asyncio.create_task(self._session.close())
+
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             use_ssl = self.cfg.get("verify_ssl", True)
-            self._ssl_context = ssl.create_default_context() if use_ssl else ssl.create_default_context()
+            
+            # 优化 1: 移除冗余的三元表达式
+            self._ssl_context = ssl.create_default_context()
             if not use_ssl:
                 self._ssl_context.check_hostname = False
                 self._ssl_context.verify_mode = ssl.CERT_NONE
@@ -69,6 +78,40 @@ class SetuPlugin(Star):
                 return cooldown_time - elapsed
         return 0
 
+    # 优化 1 & 5: 将 IP 校验与 DNS 解析解耦
+    def _is_private_ip(self, ip_str: str | int) -> bool:
+        try:
+            ip_obj = ipaddress.ip_address(ip_str)
+            return ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast or ip_obj.is_reserved
+        except ValueError:
+            return False
+
+    async def _resolve_and_check_domain(self, hostname: str) -> bool:
+        try:
+            loop = asyncio.get_running_loop()
+            # 优化 5: 增加超时控制，防止慢速 DNS 放大攻击阻塞主协程
+            infos = await asyncio.wait_for(
+                loop.getaddrinfo(hostname, 80, family=0, type=socket.SOCK_STREAM),
+                timeout=5.0
+            )
+            for info in infos:
+                resolved_ip = info[4][0]
+                
+                # 放行 Clash/Surge 等产生的 Fake-IP 网段 (198.18.x.x)
+                if str(resolved_ip).startswith('198.18.'):
+                    continue
+                    
+                if self._is_private_ip(resolved_ip):
+                    logger.warning(f"[随机图片] SSRF拦截: 域名 {hostname} 解析出危险内部 IP: {resolved_ip}")
+                    return False
+            return True
+        except asyncio.TimeoutError:
+            logger.warning(f"[随机图片] 域名解析超时: {hostname}")
+            return False # 出于安全考虑，超时默认拦截
+        except Exception as e:
+            logger.debug(f"[随机图片] 域名解析失败，回退交由底层处理: {e}")
+            return True
+
     async def _is_safe_url(self, url: str) -> bool:
         try:
             parsed = urlparse(url)
@@ -80,33 +123,16 @@ class SetuPlugin(Star):
             if hostname in forbidden_hosts:
                 return False
 
-            ip_to_check = hostname
+            # 判断是否直接为 IP（兼容十进制/十六进制）
             try:
-                if hostname.isdigit():
-                    ip_to_check = int(hostname)
-                ip_obj = ipaddress.ip_address(ip_to_check)
-                return not (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast or ip_obj.is_reserved)
+                ip_to_check = int(hostname) if hostname.isdigit() else hostname
+                ipaddress.ip_address(ip_to_check)
+                return not self._is_private_ip(ip_to_check)
             except ValueError:
                 pass 
                 
-            try:
-                loop = asyncio.get_running_loop()
-                infos = await loop.getaddrinfo(hostname, 80, family=0, type=socket.SOCK_STREAM)
-                for info in infos:
-                    resolved_ip = info[4][0]
-                    
-                    if str(resolved_ip).startswith('198.18.'):
-                        continue
-                        
-                    ip_obj = ipaddress.ip_address(resolved_ip)
-                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast or ip_obj.is_reserved:
-                        logger.warning(f"[随机图片] SSRF拦截: 域名 {hostname} 解析出危险内部 IP: {resolved_ip}")
-                        return False
-            except Exception as e:
-                logger.debug(f"[随机图片] 域名解析失败，可能是合法的无法解析或内部环境问题: {e}")
-                pass
-                
-            return True
+            # 执行 DNS 解析校验
+            return await self._resolve_and_check_domain(hostname)
         except Exception as e:
             logger.debug(f"[随机图片] URL 安全校验异常: {e}")
             return False
@@ -194,43 +220,39 @@ class SetuPlugin(Star):
             
         return b"", "", url
 
-    async def _send_advanced(self, event: AstrMessageEvent, obmsg: list, fallback_chain: MessageChain, use_forward: bool):
+    # 优化 4: 解耦 OneBot 协议的防风控逻辑，净化主发送接口
+    async def _try_onebot_forward(self, event: AstrMessageEvent, obmsg: list, use_forward: bool) -> bool | None:
         client = event.bot
         group_id = getattr(event.message_obj, "group_id", None)
         user_id = event.get_sender_id()
         bot_id = str(getattr(client, "self_id", user_id))
-        
-        if use_forward and obmsg:
-            obmsg_node = [{
-                "type": "node",
-                "data": {"name": "虚断", "uin": bot_id, "content": obmsg}
-            }]
-            try:
-                if group_id and hasattr(client, "send_group_forward_msg"):
-                    ret = await client.send_group_forward_msg(group_id=int(group_id), messages=obmsg_node)
-                    return ret if ret else True
-                elif hasattr(client, "send_private_forward_msg"):
-                    ret = await client.send_private_forward_msg(user_id=int(user_id), messages=obmsg_node)
-                    return ret if ret else True
-            except Exception as e:
-                logger.warning(f"[随机图片] 底层合并转发API调用失败，准备降级常规发送: {e}")
 
-        if obmsg:
-            try:
-                if group_id and hasattr(client, "send_group_msg"):
-                    ret = await client.send_group_msg(group_id=int(group_id), message=obmsg)
-                    return ret if ret else True
-                elif hasattr(client, "send_private_msg"):
-                    ret = await client.send_private_msg(user_id=int(user_id), message=obmsg)
-                    return ret if ret else True
-            except Exception as e:
-                logger.debug(f"[随机图片] 原生常规发送失败，准备兜底: {e}")
+        if use_forward and obmsg:
+            obmsg_node = [{"type": "node", "data": {"name": "虚断", "uin": bot_id, "content": obmsg}}]
+            if group_id and hasattr(client, "send_group_forward_msg"):
+                return await client.send_group_forward_msg(group_id=int(group_id), messages=obmsg_node)
+            elif hasattr(client, "send_private_forward_msg"):
+                return await client.send_private_forward_msg(user_id=int(user_id), messages=obmsg_node)
+        elif obmsg:
+            if group_id and hasattr(client, "send_group_msg"):
+                return await client.send_group_msg(group_id=int(group_id), message=obmsg)
+            elif hasattr(client, "send_private_msg"):
+                return await client.send_private_msg(user_id=int(user_id), message=obmsg)
+        return None
+
+    async def _send_advanced(self, event: AstrMessageEvent, obmsg: list, fallback_chain: MessageChain, use_forward: bool):
+        try:
+            onebot_ret = await self._try_onebot_forward(event, obmsg, use_forward)
+            if onebot_ret is not None:
+                return onebot_ret if onebot_ret else True
+        except Exception as e:
+            logger.warning(f"[随机图片] 特定协议原生 API 调用失败，转为通用发送: {e}")
 
         try:
             ret = await event.send(fallback_chain)
             return ret if ret else True
         except Exception as e:
-            logger.error(f"[随机图片] 兜底通用发送失败: {e}")
+            logger.error(f"[随机图片] 通用发送彻底失败: {e}")
             return False
 
     async def _recall_msgs(self, event: AstrMessageEvent, rets: list, delay: int):
@@ -263,9 +285,17 @@ class SetuPlugin(Star):
             except Exception as e: 
                 logger.debug(f"[随机图片] 消息撤回失败: {e}")
 
+    # 优化 2: 严格管理强引用
     def _create_safe_task(self, coro):
         task = asyncio.create_task(coro)
-        task.add_done_callback(lambda t: logger.error(f"异步任务异常: {t.exception()}") if not t.cancelled() and t.exception() else None)
+        self._background_tasks.add(task)
+        
+        def _task_done_callback(t: asyncio.Task):
+            self._background_tasks.discard(t)
+            if not t.cancelled() and t.exception():
+                logger.error(f"[随机图片] 异步任务执行异常: {t.exception()}")
+                
+        task.add_done_callback(_task_done_callback)
         return task
 
     async def _delayed_delete(self, path: str):
@@ -373,7 +403,6 @@ class SetuPlugin(Star):
             try:
                 real_url = body.decode('utf-8', errors='ignore').strip()
                 body, ctype, final_url = await self._safe_fetch(session, real_url)
-            # 优化 4: 修复静默吞噬异常，保留关键排错线索
             except Exception as e:
                 logger.debug(f"[随机图片] 解析纯文本 URL 时发生异常: {e}")
         
@@ -382,13 +411,12 @@ class SetuPlugin(Star):
 
         body = await asyncio.to_thread(self._compress_image, body)
         
-        file_ext = "jpg" 
-        if body[0:4] == b'\x89PNG': 
-            file_ext = "png"
-        elif body[0:3] == b'GIF': 
-            file_ext = "gif"
-        
-        filename = f"{uuid.uuid4()}.{file_ext}"
+        # 优化 2: 采用标准库精确提取扩展名
+        ext = mimetypes.guess_extension(ctype.split(';')[0]) or ".jpg"
+        if ext == '.jpe': 
+            ext = '.jpg'
+            
+        filename = f"{uuid.uuid4()}{ext}"
         temp_file_path = str(self.cache_dir / filename)
 
         async with aiofiles.open(temp_file_path, "wb") as f:
@@ -423,7 +451,6 @@ class SetuPlugin(Star):
         max_retries = self.cfg.get("send_retries", 3)
         recall_delay = int(source_cfg.get("recall_delay", 0)) if source_cfg.get("recall_delay") else 0
         
-        # 优化 3 & 5: 使用全局复用的 session
         session = await self._get_session()
         
         if use_forward:
@@ -431,13 +458,11 @@ class SetuPlugin(Star):
         else:
             return await self._handle_single_send(session, event, api_list, count, max_retries, recall_delay)
 
-    # 优化 1 & 2: 增加类型提示，并引入 asyncio.gather 将下载流程全并发化
     async def _handle_batch_forward(self, session: aiohttp.ClientSession, event: AstrMessageEvent, api_list: list[str], count: int, max_retries: int, recall_delay: int) -> bool:
         temp_files = []
         urls = []
         rets_to_recall = []
         
-        # 核心：将按序阻塞下载改为任务并行下载
         tasks = [self._download_image_with_retry(session, api_list, max_retries) for _ in range(count)]
         results = await asyncio.gather(*tasks)
         
@@ -479,13 +504,11 @@ class SetuPlugin(Star):
         await self._schedule_recall(event, rets_to_recall, recall_delay)
         return True
 
-    # 优化 1 & 2: 增加类型提示，并发下载突破 I/O 阻塞
     async def _handle_single_send(self, session: aiohttp.ClientSession, event: AstrMessageEvent, api_list: list[str], count: int, max_retries: int, recall_delay: int) -> bool:
         success_count = 0
         last_final_url = ""
         rets_to_recall = []
         
-        # 核心：先并发获取所有图片，然后再有序地排队发送到协议端防风控
         tasks = [self._download_image_with_retry(session, api_list, max_retries) for _ in range(count)]
         results = await asyncio.gather(*tasks)
         
@@ -499,7 +522,6 @@ class SetuPlugin(Star):
             fallback_chain_img = MessageChain([Image.fromFileSystem(path)])
             
             try:
-                # 逐个发送，避免瞬间高并发发送导致底层协议瞬间封控限流
                 send_ret = await self._send_advanced(event, obmsg_img, fallback_chain_img, use_forward=False)
                 if send_ret: 
                     success_count += 1
