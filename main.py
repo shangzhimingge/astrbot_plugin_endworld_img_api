@@ -7,8 +7,8 @@ import aiohttp
 import aiofiles
 import ipaddress
 import ssl
+import socket
 from io import BytesIO
-from typing import Union, List, Tuple
 from urllib.parse import urlparse, urljoin
 from pathlib import Path 
 from PIL import Image as PILImage 
@@ -18,13 +18,13 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger 
 
-@register("mccloud_img", "随机图片", "支持批量获取、API轮询、重新抽卡防拦截、双重撤回与直链兜底。", "6.1.0")
+@register("mccloud_img", "随机图片", "支持批量获取、API轮询、重新抽卡防拦截、双重撤回与直链兜底。", "6.2.1")
 class SetuPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.cfg = config 
         
-        self.cooldowns = {}
+        self.cooldowns: dict[str, float] = {}
         self.cache_dir = StarTools.get_data_dir() / "temp_images"
         if not self.cache_dir.exists():
             self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -42,7 +42,6 @@ class SetuPlugin(Star):
 
     def _check_cooldown(self, user_id: str) -> float:
         now = time.time()
-        # 优化 2: 引入惰性清理，避免高并发下每次请求都遍历字典重建
         if len(self.cooldowns) > 50:
             self._clean_cooldowns()
             
@@ -53,7 +52,7 @@ class SetuPlugin(Star):
                 return cooldown_time - elapsed
         return 0
 
-# 优化 3: 轻量级 SSRF 防御，去除底层 DNS 强解析，兼容代理与容器网络
+    # 包含 Fake-IP 兼容的 SSRF 防御机制
     async def _is_safe_url(self, url: str) -> bool:
         try:
             parsed = urlparse(url)
@@ -61,29 +60,43 @@ class SetuPlugin(Star):
             if not hostname: 
                 return False
                 
-            forbidden_hosts = ['localhost', '::1', '0.0.0.0', '127.0.0.1']
+            forbidden_hosts = ['localhost', '::1', '0.0.0.0']
             if hostname in forbidden_hosts:
                 return False
 
-            # 尝试直接解析为 IP 检查（针对十进制、十六进制等异常 IP 格式直接发起的绕过）
+            ip_to_check = hostname
             try:
-                # 兼容攻击者使用纯十进制 IP 的情况 (例如 2130706433 对应 127.0.0.1)
-                ip_to_check = int(hostname) if hostname.isdigit() else hostname
+                if hostname.isdigit():
+                    ip_to_check = int(hostname)
                 ip_obj = ipaddress.ip_address(ip_to_check)
-                if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast or ip_obj.is_reserved:
-                    return False
+                return not (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast or ip_obj.is_reserved)
             except ValueError:
-                # 抛出 ValueError 说明它不是个 IP，而是一个正常的字符串域名。
-                # 直接放行，交由 aiohttp 处理。若后续出现 302 重定向到内网，
-                # _safe_fetch 中的 allow_redirects=False 与递归逻辑依然能将其拦截。
+                pass 
+                
+            try:
+                loop = asyncio.get_running_loop()
+                infos = await loop.getaddrinfo(hostname, 80, family=0, type=socket.SOCK_STREAM)
+                for info in infos:
+                    resolved_ip = info[4][0]
+                    
+                    # 核心兼容：放行 Clash/Surge 等代理软件产生的 Fake-IP 网段 (198.18.x.x)
+                    if str(resolved_ip).startswith('198.18.'):
+                        continue
+                        
+                    ip_obj = ipaddress.ip_address(resolved_ip)
+                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast or ip_obj.is_reserved:
+                        logger.warning(f"[随机图片] SSRF拦截: 域名 {hostname} 解析出危险内部 IP: {resolved_ip}")
+                        return False
+            except Exception as e:
+                logger.debug(f"[随机图片] 域名解析失败，可能是合法的无法解析或内部环境问题: {e}")
                 pass
-
+                
             return True
         except Exception as e:
-            logger.debug(f"[随机图片] URL 检测过程异常: {e}")
+            logger.debug(f"[随机图片] URL 安全校验异常: {e}")
             return False
 
-    def _extract_url_from_json(self, data: Union[dict, list]) -> str:
+    def _extract_url_from_json(self, data: dict | list) -> str:
         if isinstance(data, list):
             for item in data:
                 res = self._extract_url_from_json(item)
@@ -99,7 +112,6 @@ class SetuPlugin(Star):
                     return res
         return ""
 
-    # 优化 1 & 4: 规范 PEP 8 写法，抛弃除了报错外的静默处理
     def _compress_image(self, image_data: bytes) -> bytes:
         if not self.cfg.get("compress_enable", True):
             return image_data
@@ -120,8 +132,7 @@ class SetuPlugin(Star):
             logger.warning(f"[随机图片] 压缩失败，回退使用原图: {e}")
             return image_data 
 
-    # 优化 3: 限制递归重定向以防 SSRF
-    async def _safe_fetch(self, session: aiohttp.ClientSession, url: str, max_size_mb: int = 20, redirects: int = 3) -> Tuple[bytes, str, str]:
+    async def _safe_fetch(self, session: aiohttp.ClientSession, url: str, max_size_mb: int = 20, redirects: int = 3) -> tuple[bytes, str, str]:
         if redirects < 0:
             return b"", "", url
 
@@ -139,7 +150,6 @@ class SetuPlugin(Star):
         }
 
         try:
-            # allow_redirects=False 手动接管 30x 状态码，防止被重定向到内网资源
             async with session.get(no_cache_url, headers=headers, allow_redirects=False, timeout=20) as response:
                 if response.status in (301, 302, 303, 307, 308):
                     location = response.headers.get("Location")
@@ -169,13 +179,14 @@ class SetuPlugin(Star):
             
         return b"", "", url
 
+    # 包含跨平台抽象与 OneBot 底层合并转发的发送机制
     async def _send_advanced(self, event: AstrMessageEvent, obmsg: list, fallback_chain: MessageChain, use_forward: bool):
         client = event.bot
         group_id = getattr(event.message_obj, "group_id", None)
         user_id = event.get_sender_id()
         bot_id = str(getattr(client, "self_id", user_id))
         
-        if use_forward:
+        if use_forward and obmsg:
             obmsg_node = [{
                 "type": "node",
                 "data": {"name": "虚断", "uin": bot_id, "content": obmsg}
@@ -188,51 +199,26 @@ class SetuPlugin(Star):
                     ret = await client.send_private_forward_msg(user_id=int(user_id), messages=obmsg_node)
                     return ret if ret else True
             except Exception as e:
-                logger.warning(f"[随机图片] 合并转发调用失败，降级常规发送: {e}")
+                logger.warning(f"[随机图片] 底层合并转发API调用失败，准备降级通用发送: {e}")
 
-        try:
-            if group_id and hasattr(client, "send_group_msg"):
-                ret = await client.send_group_msg(group_id=int(group_id), message=obmsg)
-                return ret if ret else True
-            elif hasattr(client, "send_private_msg"):
-                ret = await client.send_private_msg(user_id=int(user_id), message=obmsg)
-                return ret if ret else True
-        except Exception as e: 
-            logger.debug(f"[随机图片] 原生常规发送失败: {e}")
-            
         try:
             ret = await event.send(fallback_chain)
             return ret if ret else True
         except Exception as e:
-            logger.error(f"[随机图片] 兜底发送失败: {e}")
+            logger.error(f"[随机图片] 兜底通用发送失败: {e}")
             return False
 
     async def _recall_msgs(self, event: AstrMessageEvent, rets: list, delay: int):
         logger.info(f"[随机图片] 撤回倒计时开始: {delay} 秒")
         await asyncio.sleep(delay)
-        client = event.bot
         for send_ret in rets:
             if send_ret is True or not send_ret:
                 continue
             try:
                 if hasattr(send_ret, "recall"): 
                     await send_ret.recall()
-                else:
-                    msg_id = None
-                    if isinstance(send_ret, dict): 
-                        msg_id = send_ret.get("message_id")
-                    elif hasattr(send_ret, "message_id"): 
-                        msg_id = getattr(send_ret, "message_id")
-                        
-                    if not msg_id: 
-                        continue
-                    
-                    if hasattr(client, "delete_msg"): 
-                        await client.delete_msg(message_id=int(msg_id))
-                    elif hasattr(client, "api") and hasattr(client.api, "call_action"): 
-                        await client.api.call_action("delete_msg", message_id=int(msg_id))
             except Exception as e: 
-                logger.debug(f"[随机图片] 消息撤回过程失败: {e}")
+                logger.debug(f"[随机图片] 消息撤回失败: {e}")
 
     def _create_safe_task(self, coro):
         task = asyncio.create_task(coro)
@@ -242,18 +228,13 @@ class SetuPlugin(Star):
     async def _delayed_delete(self, path: str):
         await asyncio.sleep(30)
         try: 
-            os.remove(path)
+            if os.path.exists(path):
+                os.remove(path)
         except Exception as e: 
             logger.debug(f"[随机图片] 延迟清理缓存失败: {e}")
 
-    @filter.event_message_type(filter.EventMessageType.ALL)
-    async def on_message(self, event: AstrMessageEvent):
-        msg_text = event.message_str.strip()
+    def _match_source(self, msg_text: str) -> tuple[dict | None, int]:
         sources = self.cfg.get("sources", [])
-        matched_source = None
-        is_matched = False
-        count = 1
-
         for source in sources:
             if not isinstance(source, dict): 
                 continue
@@ -263,44 +244,34 @@ class SetuPlugin(Star):
                 if not kw: 
                     continue
                 if msg_text == kw:
-                    matched_source = source
-                    is_matched = True
-                    break
+                    return source, 1
                 elif msg_text.startswith(kw + " "):
                     rest = msg_text[len(kw):].strip()
                     if rest.isdigit():
-                        count = int(rest)
-                        matched_source = source
-                        is_matched = True
-                        break
-            if is_matched: 
-                break
-        
-        if not is_matched or not matched_source: 
-            return 
+                        return source, int(rest)
+        return None, 1
 
+    async def _validate_request(self, event: AstrMessageEvent, source: dict, count: int) -> tuple[bool, int]:
         group_id = getattr(event.message_obj, "group_id", None)
         if group_id:
             group_id_str = str(group_id)
-            list_mode = matched_source.get("list_mode", "无限制")
-            group_list = [str(x) for x in matched_source.get("group_list", []) if x]
+            list_mode = source.get("list_mode", "无限制")
+            group_list = [str(x) for x in source.get("group_list", []) if x]
             if list_mode == "白名单" and group_id_str not in group_list: 
-                return 
+                return False, count
             elif list_mode == "黑名单" and group_id_str in group_list: 
-                return 
-
-        event.stop_event()
+                return False, count
 
         user_id = event.get_sender_id()
         remaining = self._check_cooldown(user_id)
         if remaining > 0:
-            yield event.plain_result(self._text(f"冲太快了！请休息 {int(remaining)} 秒再试"))
-            return
-        
-        target_apis = matched_source.get("apis", [])
+            await event.send(MessageChain([Plain(self._text(f"冲太快了！请休息 {int(remaining)} 秒再试"))]))
+            return False, count
+            
+        target_apis = source.get("apis", [])
         if not target_apis:
-            yield event.plain_result(self._text(f"图源 [{matched_source.get('name')}] 未配置 API 地址"))
-            return
+            await event.send(MessageChain([Plain(self._text(f"图源 [{source.get('name')}] 未配置 API 地址"))]))
+            return False, count
 
         max_count = self.cfg.get("batch_max_count", 10)
         if count > max_count:
@@ -308,7 +279,24 @@ class SetuPlugin(Star):
             await event.send(MessageChain([Plain(self._text(f"最多只能同时请求 {max_count} 张哦，已为您调整~"))]))
         elif count <= 0:
             count = 1
+            
+        return True, count
 
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def on_message(self, event: AstrMessageEvent):
+        msg_text = event.message_str.strip()
+        matched_source, count = self._match_source(msg_text)
+        
+        if not matched_source: 
+            return 
+            
+        event.stop_event()
+        
+        is_valid, count = await self._validate_request(event, matched_source, count)
+        if not is_valid:
+            return
+
+        target_apis = matched_source.get("apis", [])
         source_use_forward = matched_source.get("use_forward", False)
         force_forward = self.cfg.get("batch_force_forward", False)
         threshold = self.cfg.get("batch_forward_threshold", 3)
@@ -316,34 +304,38 @@ class SetuPlugin(Star):
 
         success = await self._process_and_send(event, target_apis, matched_source, count, final_use_forward)
         if success: 
-            self.cooldowns[user_id] = time.time()
+            self.cooldowns[event.get_sender_id()] = time.time()
 
-    # 优化 5: 使用 to_thread 异步执行压缩，彻底拯救事件循环
-    async def _try_download_single(self, session: aiohttp.ClientSession, api_url: str) -> Tuple[str, str]:
+    async def _try_download_single(self, session: aiohttp.ClientSession, api_url: str) -> tuple[str, str]:
         body, ctype, final_url = await self._safe_fetch(session, api_url)
         if not body: 
-            return None, None
+            return "", ""
 
         if "application/json" in ctype:
             try:
-                data = json.loads(body.decode('utf-8'))
+                decoded_body = body.decode('utf-8', errors='ignore')
+                data = json.loads(decoded_body)
                 real_img_url = self._extract_url_from_json(data)
                 if real_img_url:
                     body, ctype, final_url = await self._safe_fetch(session, real_img_url)
+            except json.JSONDecodeError as e:
+                logger.debug(f"[随机图片] 解析图源 JSON 失败: {e}")
             except Exception as e:
-                logger.debug(f"[随机图片] 解析 JSON 图源发生错误: {e}")
+                logger.debug(f"[随机图片] 处理 JSON 图源时发生未预期错误: {e}")
                 
         if not body: 
-            return None, None
+            return "", ""
 
         if "text" in ctype and len(body) < 2000 and body.startswith(b"http"):
-            real_url = body.decode('utf-8').strip()
-            body, ctype, final_url = await self._safe_fetch(session, real_url)
+            try:
+                real_url = body.decode('utf-8', errors='ignore').strip()
+                body, ctype, final_url = await self._safe_fetch(session, real_url)
+            except Exception:
+                pass
         
         if not body: 
-            return None, None
+            return "", ""
 
-        # 核心性能优化！剥离 CPU 密集型操作到独立线程池中
         body = await asyncio.to_thread(self._compress_image, body)
         
         file_ext = "jpg" 
@@ -360,11 +352,10 @@ class SetuPlugin(Star):
 
         return temp_file_path, final_url
 
-    # 优化 2: 采用轮询池分配算法，去除冗余重试，限制单张图请求最大上限
-    async def _download_image_with_retry(self, session: aiohttp.ClientSession, api_list: List[str], max_retries: int) -> Tuple[str, str]:
+    async def _download_image_with_retry(self, session: aiohttp.ClientSession, api_list: list[str], max_retries: int) -> tuple[str, str]:
         valid_apis = [url.strip() for url in api_list if url.strip()]
         if not valid_apis:
-            return None, None
+            return "", ""
             
         total_attempts = max_retries + 1
         for attempt in range(total_attempts):
@@ -377,12 +368,14 @@ class SetuPlugin(Star):
                 logger.debug(f"[随机图片] 接口请求失效 第 {attempt + 1} 次尝试 ({api_url}): {e}")
             
             if attempt < total_attempts - 1:
-                await asyncio.sleep(1)
+                if len(valid_apis) == 1:
+                    await asyncio.sleep(2) 
+                else:
+                    await asyncio.sleep(0.5)
                 
-        return None, None
+        return "", ""
 
-    # 优化 1: 分解高复杂度函数
-    async def _process_and_send(self, event: AstrMessageEvent, api_list: List[str], source_cfg: dict, count: int, use_forward: bool) -> bool:
+    async def _process_and_send(self, event: AstrMessageEvent, api_list: list[str], source_cfg: dict, count: int, use_forward: bool) -> bool:
         use_ssl = self.cfg.get("verify_ssl", True)
         ssl_context = ssl.create_default_context() if use_ssl else False
         if not use_ssl:
@@ -416,9 +409,9 @@ class SetuPlugin(Star):
             return False
             
         last_final_url = urls[-1] if urls else ""
+        
         obmsg_batch = []
         fallback_chains = []
-        
         for path in temp_files:
             file_uri = Path(path).absolute().as_uri()
             obmsg_batch.append({'type': 'image', 'data': {'file': file_uri}})
@@ -432,9 +425,9 @@ class SetuPlugin(Star):
                 if recall_delay > 0:
                     rets_to_recall.append(send_ret)
             else:
-                raise Exception("框架发送接口无有效返回值")
+                raise Exception("合并转发和通用发送均无返回值")
         except Exception as e:
-            logger.warning(f"[随机图片] 合并转发调用失败，触发直链兜底: {e}")
+            logger.warning(f"[随机图片] 发送失败，触发直链兜底: {e}")
             fallback_msg = self._text(f"图片批量发送均被拦截，为您提供最后一张图的直链：\n{last_final_url}")
             await self._send_advanced(event, [{'type': 'text', 'data': {'text': fallback_msg}}], MessageChain([Plain(fallback_msg)]), use_forward=True)
             self._cleanup_files(temp_files)
@@ -482,9 +475,10 @@ class SetuPlugin(Star):
         await self._schedule_recall(event, rets_to_recall, recall_delay)
         return success_count > 0
 
-    def _cleanup_files(self, paths: List[str]):
+    def _cleanup_files(self, paths: list[str]):
         for path in paths:
-            self._create_safe_task(self._delayed_delete(path))
+            if path:
+                self._create_safe_task(self._delayed_delete(path))
 
     async def _schedule_recall(self, event, rets_to_recall, recall_delay):
         if rets_to_recall and recall_delay > 0:
