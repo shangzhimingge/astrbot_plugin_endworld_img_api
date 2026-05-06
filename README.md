@@ -1,17 +1,16 @@
 # 🖼️ 随机图片 (Random Image)
 
-[![Version](https://img.shields.io/badge/version-v5.9.0-blue.svg)](https://github.com/YourUsername/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.11.4-orange.svg)](https://github.com/Soulter/AstrBot) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/version-v6.0.0-blue.svg)](https://github.com/YourUsername/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.11.4-orange.svg)](https://github.com/Soulter/AstrBot) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
 一个为 AstrBot 打造的自定义 API 获取随机图片分发插件。
 
-<img width="1408" height="768" alt="image_602ec539-0c6a-426f-877a-8dcd374be08c" src="https://github.com/user-attachments/assets/8a5c7712-ff32-44d3-b051-7b881f3e16a2" />
-
+<img width="1408" height="768" alt="Plugin Logo" src="https://github.com/user-attachments/assets/8a5c7712-ff32-44d3-b051-7b881f3e16a2" />
 ## 🌟 功能特点一览
 
 * **🚀 批量获取与动态合并**：支持通过 `指令 + 空格 + 数量`（如 `涩涩 5`）一次性获取多张图片，内置智能阈值防刷屏，超过设定张数自动打包为合并转发。
-* **🎲 智能重新抽卡防拦截**：遭遇 QQ 风控或死链导致发送失败时，不再死磕废图，而是**自动向 API 重新抽卡获取新图发送**，极大提升出图成功率和连贯性。
-* **🌐 全能 API 兼容与破除缓存**：内置智能 JSON 寻址；并独家加入动态时间戳与浏览器 UA 伪装，**彻底解决 CDN 缓存导致的“每次都抽到同一张图”的痛点**。
-* **🎛️ 强大的 Web 可视化配置**：基于 AstrBot 最新架构，多组指令、分群黑白名单、撤回时间均可独立配置。
+* **🎲 智能重新抽卡防拦截**：遭遇 QQ 风控或死链导致发送失败时，不再死磕废图，而是自动向 API 重新抽卡获取新图发送，极大提升出图成功率和连贯性。
+* **🌐 全能 API 兼容与破除缓存**：内置智能 JSON 寻址；并独家加入动态时间戳与浏览器 UA 伪装，彻底解决 CDN 缓存导致的“每次都抽到同一张图”的痛点。
+* **🎛️ 丰富的插件配置**：基于 AstrBot 最新架构，多组指令、分群黑白名单、撤回时间均可独立配置。
 * **📦 终极直链兜底**：当所有尝试（重新抽卡、备用 API）均全军覆没时，最后一次有效直链将被强制转为合并转发消息作为兜底，绝不裸发直链，最大程度保护群聊安全。
 * **👻 完美双重撤回机制**：绕过封装直达底层协议，发送与撤回如丝般顺滑。撤回提示文字独立发送，杜绝“合并卡片无法撤回”的牛皮癣问题。
 * **⚡ 自动压缩防超时**：内置 `Pillow` 引擎，自定义“压缩阈值”，突破大图发不出的瓶颈。
@@ -26,7 +25,6 @@
 
 ```bash
 pip install aiofiles aiohttp Pillow
-
 ```
 
 *(或者直接使用插件目录下的 `requirements.txt` 自动安装)*
@@ -44,7 +42,7 @@ pip install aiofiles aiohttp Pillow
 * **点击** “添加 图源配置”。
 * **规则名称**：随意命名，如“优质壁纸”。
 * **触发指令**：输入你想要的触发词，多个请分行或使用列表（如 `壁纸`, `来点图`）。
-* **API 地址**：输入对应的 API 链接。**强烈建议填写多个 API**，插件会在前一个获取或发送失败时自动尝试下一个。
+* **API 地址**：输入对应的 API 链接。强烈建议填写多个 API，插件会在前一个获取或发送失败时自动尝试下一个。
 * **使用合并转发发送**：勾选后，该图源的单张图片也会以合并转发卡片发出，有效防吞。
 * **分群管理**：按需下拉选择 `无限制`、`黑名单` 或 `白名单`，并填入适用群号。
 * **自动撤回时间**：填入 `30` 代表 30秒后撤回；`0` 则不撤回。
@@ -74,47 +72,15 @@ pip install aiofiles aiohttp Pillow
 
 ## ⚠️ 注意事项 & 提示
 
-* **空间无痕清理**：下载的临时图片（`data/temp_images/`）会在发送流程结束后的 30 秒内自动销毁。如果图片被拦截发送失败，则会被**立刻销毁**以节省空间。
+* **空间无痕清理**：下载的临时图片（`data/temp_images/`）会在发送流程结束后的 30 秒内自动销毁。如果图片被拦截发送失败，则会被立刻销毁以节省空间。
 * **突破 CDN 缓存**：插件底层已接入毫秒级时间戳后缀及浏览器 UA 伪装，不用再担心图源服务器缓存导致每次都抽出同一张图了！
-* **法律警告**：本插件仅作为网络图片 API 的分发与转发工具。**请遵守相关法律法规，严禁在公开群聊对接与传播非法、违禁的图片源。使用者需自行承担因图源配置不当引发的封号或法律风险。**
-
----
-
-## 📝 更新日志 (Changelog)
-
-* **v5.9.0** * ✨ **批量获取支持**：新增 `指令 + 空格 + 数量` 批量出图功能。
-* ✨ **动态合并转发**：新增批量发图时的阈值判定，超量自动转为合并聊天记录，防刷屏又防封。
-* 🎲 **重新抽卡机制**：图片发送失败（被风控）时，从“死磕重发废图”改为“重新调用 API 获取新图”，大幅提升体验。
-* 🌐 **破除 HTTP 缓存**：加入动态时间戳和 UA 伪装，解决部分套了 CDN 的 API 在群聊中总是返回同一张图的顽疾。
-* 🐛 **撤回逻辑优化**：提示文字强制独立发送。
-
-
-* **v5.8.0**
-* ✨ 多图源自动轮询机制：当前 API 失效时自动静默尝试下一个。
-* 🛡️ 终极兜底逻辑优化：仅在所有 API 全军覆没时才会触发直链兜底。
-
-
-* **v5.7.1**
-* 🛡️ 兜底直链强制合并转发：彻底解决群内直发外部链接导致封号的风险。
-* ✨ 独立图源合并发送选项：允许正常图片也伪装在卡片内发出。
-
-
-* **v5.6**
-* ✨ 新增【猫娘模式】，支持自定义后缀词。
-
-
-* **v5.3 - v5.5**
-* 🐛 修复顶层框架 `message_id` 获取异常，改为直达底层协议实现 100% 撤回。
-
-
-* **v5.0 - v5.2** * 🛡️ 新增防 SSRF、OOM；新增分群黑白名单；首次引入阅后即焚功能。
-* **v4.0 - v4.9** * 🚀 WebUI 架构重构，引入本地缓存发送与 `Pillow` 压缩防超时机制。
+* **法律警告**：本插件仅作为网络图片 API 的分发与转发工具。请遵守相关法律法规，严禁在公开群聊对接与传播非法、违禁的图片源。使用者需自行承担因图源配置不当引发的封号或法律风险。
 
 ---
 
 ## 🛠️ 开发维护
 
-* **版本号**：v5.9.0 (Pro Edition)
+* **版本号**：v6.0.0 (Pro Edition)
 * **衍生自**：[mccloud_img](https://github.com/MCYUNIDC/mccloud_img) (Author: MC云)
 * **当前重构作者**：殇之冥歌
 * **核心依赖**：`AstrBot Core v4.11.4+`
