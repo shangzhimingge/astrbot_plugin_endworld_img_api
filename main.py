@@ -179,13 +179,14 @@ class SetuPlugin(Star):
             
         return b"", "", url
 
-    # 包含跨平台抽象与 OneBot 底层合并转发的发送机制
+# 包含跨平台抽象与 OneBot 底层合并转发/常规发送的终极兼容机制
     async def _send_advanced(self, event: AstrMessageEvent, obmsg: list, fallback_chain: MessageChain, use_forward: bool):
         client = event.bot
         group_id = getattr(event.message_obj, "group_id", None)
         user_id = event.get_sender_id()
         bot_id = str(getattr(client, "self_id", user_id))
         
+        # 1. 尝试底层合并转发防风控
         if use_forward and obmsg:
             obmsg_node = [{
                 "type": "node",
@@ -199,8 +200,21 @@ class SetuPlugin(Star):
                     ret = await client.send_private_forward_msg(user_id=int(user_id), messages=obmsg_node)
                     return ret if ret else True
             except Exception as e:
-                logger.warning(f"[随机图片] 底层合并转发API调用失败，准备降级通用发送: {e}")
+                logger.warning(f"[随机图片] 底层合并转发API调用失败，准备降级常规发送: {e}")
 
+        # 2. 尝试底层原生常规发送（确保能拿到准确的 message_id 用于撤回）
+        if obmsg:
+            try:
+                if group_id and hasattr(client, "send_group_msg"):
+                    ret = await client.send_group_msg(group_id=int(group_id), message=obmsg)
+                    return ret if ret else True
+                elif hasattr(client, "send_private_msg"):
+                    ret = await client.send_private_msg(user_id=int(user_id), message=obmsg)
+                    return ret if ret else True
+            except Exception as e:
+                logger.debug(f"[随机图片] 原生常规发送失败，准备兜底: {e}")
+
+        # 3. 终极降级：交还给 AstrBot 框架兜底发送
         try:
             ret = await event.send(fallback_chain)
             return ret if ret else True
@@ -208,15 +222,40 @@ class SetuPlugin(Star):
             logger.error(f"[随机图片] 兜底通用发送失败: {e}")
             return False
 
+# 【修复】：全面兼容底层协议返回字典和框架返回对象的双重撤回逻辑
     async def _recall_msgs(self, event: AstrMessageEvent, rets: list, delay: int):
         logger.info(f"[随机图片] 撤回倒计时开始: {delay} 秒")
         await asyncio.sleep(delay)
+        client = event.bot
+        
         for send_ret in rets:
             if send_ret is True or not send_ret:
                 continue
+                
             try:
+                # 情况 1：AstrBot 框架标准返回对象，自带 recall() 方法
                 if hasattr(send_ret, "recall"): 
                     await send_ret.recall()
+                    continue
+                    
+                # 情况 2：原生底层 API 调用返回的结果，通常是包含 message_id 的字典或对象
+                msg_id = None
+                if isinstance(send_ret, dict): 
+                    msg_id = send_ret.get("message_id")
+                elif hasattr(send_ret, "message_id"): 
+                    msg_id = getattr(send_ret, "message_id")
+                    
+                if not msg_id: 
+                    continue
+                
+                # 调用原生撤回 API
+                if hasattr(client, "delete_msg"): 
+                    await client.delete_msg(message_id=int(msg_id))
+                elif hasattr(client, "api") and hasattr(client.api, "call_action"): 
+                    await client.api.call_action("delete_msg", message_id=int(msg_id))
+                elif hasattr(client, "recall"):
+                    await client.recall(msg_id)
+                    
             except Exception as e: 
                 logger.debug(f"[随机图片] 消息撤回失败: {e}")
 
