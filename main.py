@@ -13,19 +13,20 @@ from PIL import Image as PILImage
 
 from astrbot.api.message_components import Image, Plain
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger 
 
-@register("mccloud_img", "随机图片", "支持批量获取、API轮询、重新抽卡防拦截、双重撤回与直链兜底。", "5.9.0")
+@register("mccloud_img", "随机图片", "支持批量获取、API轮询、重新抽卡防拦截、双重撤回与直链兜底。", "6.0.0")
 class SetuPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.cfg = config 
         
         self.cooldowns = {}
-        self.cache_dir = os.path.join(os.getcwd(), "data", "temp_images")
-        if not os.path.exists(self.cache_dir):
-            os.makedirs(self.cache_dir, exist_ok=True)
+        # 规范的数据目录
+        self.cache_dir = StarTools.get_data_dir() / "temp_images"
+        if not self.cache_dir.exists():
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _text(self, base_text: str) -> str:
         if self.cfg.get("catgirl_enable", False):
@@ -48,6 +49,7 @@ class SetuPlugin(Star):
                 return cooldown_time - elapsed
         return 0
 
+    # 【回滚修正】恢复原始的文本匹配验证，丢弃阻塞式的 socket DNS 解析
     def _is_safe_url(self, url: str) -> bool:
         try:
             parsed = urlparse(url)
@@ -96,7 +98,7 @@ class SetuPlugin(Star):
         no_cache_url = f"{url}{separator}_t={int(time.time() * 1000)}"
         
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache"
         }
@@ -114,7 +116,9 @@ class SetuPlugin(Star):
                     body += chunk
                     if len(body) > max_bytes: return b"", "", final_url
                 return body, content_type, final_url
-        except Exception: pass
+        except Exception as e:
+            logger.debug(f"[随机图片] 网络请求异常: {e}")
+            pass
         return b"", "", url
 
     async def _send_advanced(self, event: AstrMessageEvent, obmsg: list, fallback_chain: MessageChain, use_forward: bool):
@@ -130,36 +134,57 @@ class SetuPlugin(Star):
             }]
             try:
                 if group_id and hasattr(client, "send_group_forward_msg"):
-                    return await client.send_group_forward_msg(group_id=int(group_id), messages=obmsg_node)
+                    ret = await client.send_group_forward_msg(group_id=int(group_id), messages=obmsg_node)
+                    return ret if ret else True
                 elif hasattr(client, "send_private_forward_msg"):
-                    return await client.send_private_forward_msg(user_id=int(user_id), messages=obmsg_node)
+                    ret = await client.send_private_forward_msg(user_id=int(user_id), messages=obmsg_node)
+                    return ret if ret else True
             except Exception as e:
                 logger.warning(f"[随机图片] 合并转发调用失败，降级常规发送: {e}")
 
         try:
             if group_id and hasattr(client, "send_group_msg"):
-                return await client.send_group_msg(group_id=int(group_id), message=obmsg)
+                ret = await client.send_group_msg(group_id=int(group_id), message=obmsg)
+                return ret if ret else True
             elif hasattr(client, "send_private_msg"):
-                return await client.send_private_msg(user_id=int(user_id), message=obmsg)
+                ret = await client.send_private_msg(user_id=int(user_id), message=obmsg)
+                return ret if ret else True
         except Exception: pass
             
-        return await event.send(fallback_chain)
+        try:
+            ret = await event.send(fallback_chain)
+            return ret if ret else True
+        except Exception as e:
+            logger.error(f"[随机图片] 兜底发送失败: {e}")
+            return False
 
     async def _recall_msgs(self, event: AstrMessageEvent, rets: list, delay: int):
         logger.info(f"[随机图片] 撤回倒计时开始: {delay} 秒")
         await asyncio.sleep(delay)
         client = event.bot
         for send_ret in rets:
-            if not send_ret: continue
+            if send_ret is True or not send_ret: continue
             try:
-                msg_id = None
-                if isinstance(send_ret, dict): msg_id = send_ret.get("message_id")
-                elif hasattr(send_ret, "message_id"): msg_id = getattr(send_ret, "message_id")
-                if not msg_id: continue
-                if hasattr(client, "delete_msg"): await client.delete_msg(message_id=int(msg_id))
-                elif hasattr(client, "api") and hasattr(client.api, "call_action"): await client.api.call_action("delete_msg", message_id=int(msg_id))
-                elif hasattr(client, "recall"): await client.recall(msg_id)
+                if hasattr(send_ret, "recall"): await send_ret.recall()
+                else:
+                    msg_id = None
+                    if isinstance(send_ret, dict): msg_id = send_ret.get("message_id")
+                    elif hasattr(send_ret, "message_id"): msg_id = getattr(send_ret, "message_id")
+                    if not msg_id: continue
+                    
+                    if hasattr(client, "delete_msg"): await client.delete_msg(message_id=int(msg_id))
+                    elif hasattr(client, "api") and hasattr(client.api, "call_action"): await client.api.call_action("delete_msg", message_id=int(msg_id))
             except Exception: pass
+
+    def _create_safe_task(self, coro):
+        task = asyncio.create_task(coro)
+        task.add_done_callback(lambda t: logger.error(f"任务异常: {t.exception()}") if not t.cancelled() and t.exception() else None)
+        return task
+
+    async def _delayed_delete(self, path: str):
+        await asyncio.sleep(30)
+        try: os.remove(path)
+        except Exception: pass
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
@@ -169,7 +194,6 @@ class SetuPlugin(Star):
         is_matched = False
         count = 1
 
-        # 匹配触发词并提取后面的数字
         for source in sources:
             if not isinstance(source, dict): continue
             keywords = source.get("keywords", [])
@@ -212,7 +236,6 @@ class SetuPlugin(Star):
             yield event.plain_result(self._text(f"图源 [{matched_source.get('name')}] 未配置 API 地址"))
             return
 
-        # 校验请求数量
         max_count = self.cfg.get("batch_max_count", 10)
         if count > max_count:
             count = max_count
@@ -220,7 +243,6 @@ class SetuPlugin(Star):
         elif count <= 0:
             count = 1
 
-        # 结合全局设置与图源独立设置判断是否使用合并转发
         source_use_forward = matched_source.get("use_forward", False)
         force_forward = self.cfg.get("batch_force_forward", False)
         threshold = self.cfg.get("batch_forward_threshold", 3)
@@ -229,7 +251,6 @@ class SetuPlugin(Star):
         success = await self._process_and_send(event, target_apis, matched_source, count, final_use_forward)
         if success: self.cooldowns[user_id] = time.time()
 
-    # 抽取核心的下载流程，专门用于多次调用
     async def _download_image(self, session: aiohttp.ClientSession, api_list: List[str]) -> Tuple[str, str]:
         for api_url in api_list:
             api_url = str(api_url).strip()
@@ -260,7 +281,8 @@ class SetuPlugin(Star):
                 elif body[0:3] == b'GIF': file_ext = "gif"
                 
                 filename = f"{uuid.uuid4()}.{file_ext}"
-                temp_file_path = os.path.join(self.cache_dir, filename)
+                # 【修复】使用规范的 Path 拼接方式
+                temp_file_path = str(self.cache_dir / filename)
 
                 async with aiofiles.open(temp_file_path, "wb") as f:
                     await f.write(body)
@@ -271,13 +293,9 @@ class SetuPlugin(Star):
                 continue
         return None, None
 
-    async def _delayed_delete(self, path: str):
-        await asyncio.sleep(30)
-        try: os.remove(path)
-        except: pass
-
     async def _process_and_send(self, event: AstrMessageEvent, api_list: List[str], source_cfg: dict, count: int, use_forward: bool) -> bool:
-        ssl_context = aiohttp.TCPConnector(verify_ssl=self.cfg.get("verify_ssl", True))
+        # 【回滚修正】使用兼容性最好的 SSL 传参方式
+        connector = aiohttp.TCPConnector(ssl=self.cfg.get("verify_ssl", True))
         max_retries = self.cfg.get("send_retries", 3)
         recall_delay = int(source_cfg.get("recall_delay", 0)) if source_cfg.get("recall_delay") else 0
         
@@ -285,14 +303,12 @@ class SetuPlugin(Star):
         last_final_url = ""
         rets_to_recall = []
 
-        async with aiohttp.ClientSession(connector=ssl_context) as session:
-            # ================= 模式一：批量且合并转发 =================
+        async with aiohttp.ClientSession(connector=connector) as session:
             if use_forward:
                 temp_files = []
                 urls = []
                 for _ in range(count):
-                    # 即使是合并转发，获取图片阶段也允许网络重试
-                    for _ in range(max_retries + 1):
+                    for retry in range(max_retries + 1):
                         path, url = await self._download_image(session, api_list)
                         if path:
                             temp_files.append(path)
@@ -305,7 +321,6 @@ class SetuPlugin(Star):
                 
                 last_final_url = urls[-1] if urls else ""
                 
-                # 将收集到的多张图片打包在一个合并转发节点内
                 obmsg_batch = []
                 fallback_chains = []
                 for path in temp_files:
@@ -321,7 +336,7 @@ class SetuPlugin(Star):
                         success_count = len(temp_files)
                         if recall_delay > 0: rets_to_recall.append(send_ret)
                     else:
-                        raise Exception("Send advanced failed")
+                        raise Exception("Send advanced returned False")
                 except Exception as e:
                     logger.warning(f"[随机图片] 合并转发调用失败，触发直链兜底: {e}")
                     fallback_msg = self._text(f"图片批量发送均被拦截，为您提供最后一张图的直链：\n{last_final_url}")
@@ -329,13 +344,12 @@ class SetuPlugin(Star):
                     return True 
                 
                 for path in temp_files:
-                    asyncio.create_task(self._delayed_delete(path))
+                    self._create_safe_task(self._delayed_delete(path))
 
-            # ================= 模式二：直发模式（带有重新抽卡防拦截） =================
             else:
                 for _ in range(count):
                     send_success = False
-                    for attempt in range(max_retries + 1):
+                    for retry in range(max_retries + 1):
                         path, url = await self._download_image(session, api_list)
                         if not path: continue
                         last_final_url = url
@@ -345,24 +359,22 @@ class SetuPlugin(Star):
                         fallback_chain_img = MessageChain([Image.fromFileSystem(path)])
                         
                         try:
-                            # 尝试单独发送该图片
                             send_ret = await self._send_advanced(event, obmsg_img, fallback_chain_img, use_forward=False)
                             if send_ret: 
                                 send_success = True
                                 success_count += 1
                                 if recall_delay > 0: rets_to_recall.append(send_ret)
-                                asyncio.create_task(self._delayed_delete(path))
+                                self._create_safe_task(self._delayed_delete(path))
                                 break 
                         except Exception as e:
-                            logger.warning(f"[随机图片] 第 {attempt+1} 次获取的图片被拦截或发送失败，准备重新抽卡获取新图: {e}")
+                            logger.warning(f"[随机图片] 第 {retry+1} 次获取的图片被拦截或发送失败: {e}")
                             try: os.remove(path)
-                            except: pass
+                            except Exception: pass
                             await asyncio.sleep(1) 
 
                     if not send_success:
                         logger.error(f"[随机图片] 一张图片连续 {max_retries + 1} 次被拦截，已放弃该张")
                         
-                # 如果一张都没发出来，触发兜底
                 if success_count == 0:
                     if last_final_url:
                         fallback_msg = self._text(f"图片多次发送均被拦截（已尝试重新抽卡），为您提供最后一张图的直链：\n{last_final_url}")
@@ -372,13 +384,12 @@ class SetuPlugin(Star):
                         await event.send(MessageChain([Plain(self._text("所有图源均无法连接，或已被屏蔽"))]))
                     return False
 
-        # 处理独立的撤回提醒消息
         if success_count > 0 and recall_delay > 0:
             notice_text = self._text(f"发送的内容将在 {recall_delay} 秒后自动撤回")
             try:
                 notice_ret = await self._send_advanced(event, [{'type': 'text', 'data': {'text': notice_text}}], MessageChain([Plain(notice_text)]), use_forward=False)
                 if notice_ret: rets_to_recall.append(notice_ret)
             except Exception: pass
-            asyncio.create_task(self._recall_msgs(event, rets_to_recall, recall_delay))
+            self._create_safe_task(self._recall_msgs(event, rets_to_recall, recall_delay))
 
         return success_count > 0
