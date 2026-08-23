@@ -1,12 +1,15 @@
+<div align="center">
+  
 # 🖼️ 随机图片 (Random Image)
 
-<img src="https://count.getloli.com/@astrbot_plugin_endworld_img_api?name=astrbot_plugin_endworld_img_api&theme=booru-jaypee&padding=7&offset=0&align=top&scale=1&pixelated=0&darkmode=auto" alt="count" />
+<img src="https://count.getloli.com/@astrbot_plugin_endworld_img_api?name=astrbot_plugin_endworld_img_api&theme=booru-jaypee&padding=7&offset=0&align=center&scale=1&pixelated=0&darkmode=auto" alt="count" />
 
 [![Version](https://img.shields.io/badge/version-v6.4.0-blue.svg)](https://github.com/YourUsername/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.11.4-orange.svg)](https://github.com/Soulter/AstrBot) [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
 一个为 AstrBot 打造的**高并发、强安全**的自定义 API 随机图片分发插件。
 
 <img width="1408" height="768" alt="Plugin Logo" src="https://github.com/user-attachments/assets/8a5c7712-ff32-44d3-b051-7b881f3e16a2" />
+</div>
 
 ## 🌟 核心特性一览
 
