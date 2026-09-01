@@ -4,7 +4,7 @@
 
 <img src="https://count.getloli.com/@astrbot_plugin_endworld_img_api?name=astrbot_plugin_endworld_img_api&theme=booru-jaypee&padding=7&offset=0&align=center&scale=1&pixelated=0&darkmode=auto" alt="count" />
 
-[![Version](https://img.shields.io/badge/version-v6.4.0-blue.svg)](https://github.com/YourUsername/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.11.4-orange.svg)](https://github.com/Soulter/AstrBot) [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/version-v6.5.0-blue.svg)](https://github.com/shangzhimingge/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.17.0-orange.svg)](https://github.com/AstrBotDevs/AstrBot) [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
 一个为 AstrBot 打造的**高并发、强安全**的自定义 API 随机图片分发插件。
 
@@ -37,6 +37,19 @@ pip install aiofiles aiohttp Pillow
 ---
 
 ## 🚀 使用说明 & 配置指南
+
+### WebUI 配置中心
+
+在 AstrBot WebUI 中打开“插件”详情，进入本插件的 **settings / 配置中心** Page。该页面可直接完成全部插件配置并同步到运行中的插件：
+
+* **图源管理**：新增、删除和排序图源，编辑触发词、API 地址、群号名单、发送方式与撤回时间。
+* **行内 API 检测**：每个 API 输入框旁都有“检测”按钮；检测使用输入框当前值，无需先保存，并显示 HTTP 状态、内容类型与耗时。
+* **全局设置**：配置批量转发、最大张数、失败重试、冷却、图片压缩、SSL 验证与回复风格。
+* **状态概览**：查看插件版本、图源数量、冷却记录、网络会话与最近保存时间。
+* **导入与导出**：导入 UTF-8 JSON 后先显示变更预览，确认后才写入；也可下载当前完整配置。
+* **保存保护**：后端会再次校验所有字段，保存失败时恢复原配置；离开页面前会提示尚未保存的更改。
+
+页面会跟随 AstrBot 的亮色/暗色主题，并适配窄屏与键盘操作。新增 Page 后需重载一次插件；静态页面更新通常刷新即可。
 
 ### 1. 添加与管理图源
 
@@ -76,9 +89,9 @@ pip install aiofiles aiohttp Pillow
 
 ## 🛠️ 开发维护
 
-* **版本号**：v6.4.0 (Enterprise Edition)
+* **版本号**：v6.5.0
 * **衍生自**：[mccloud_img](https://github.com/MCYUNIDC/mccloud_img) (Author: MC云)
 * **重构作者**：殇之冥歌
-* **核心依赖**：`AstrBot Core v4.11.4+`
+* **核心依赖**：`AstrBot Core v4.17.0+`
 
 🎉 **Enjoy your high-quality random images!** 🌸
