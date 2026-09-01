@@ -3,12 +3,17 @@ import time
 import uuid
 import json
 import asyncio
+import copy
+import inspect
 import aiohttp
 import aiofiles
 import ipaddress
 import ssl
 import socket
 import mimetypes
+import tempfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from io import BytesIO
 from urllib.parse import urlparse, urljoin
 from pathlib import Path 
@@ -18,8 +23,26 @@ from astrbot.api.message_components import Image, Plain
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger 
+from astrbot.api.web import PluginUploadFile, error_response, file_response, json_response, request
 
-@register("mccloud_img", "随机图片", "支持批量并发获取、轮询抽卡防拦截、双重撤回与直链兜底的高性能版。", "6.4.0")
+from webui_config import ConfigValidationError, load_schema, summarize_changes, validate_and_normalize
+
+
+PLUGIN_NAME = "astrbot_plugin_endworld_img_api"
+PLUGIN_VERSION = "6.5.0"
+IMPORT_LIMIT_BYTES = 256 * 1024
+
+
+@dataclass(slots=True)
+class FetchResult:
+    ok: bool
+    status: int | None
+    content_type: str
+    final_url: str
+    body: bytes
+    error: str | None
+
+@register("mccloud_img", "随机图片", "支持批量并发获取、轮询抽卡防拦截、双重撤回与直链兜底的高性能版。", PLUGIN_VERSION)
 class SetuPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -32,9 +55,166 @@ class SetuPlugin(Star):
             
         self._session: aiohttp.ClientSession | None = None
         self._ssl_context: ssl.SSLContext | None = None
+        self._config_lock = asyncio.Lock()
+        self._session_lock = asyncio.Lock()
+        self._last_saved_at: str | None = None
+        self._schema = load_schema()
         
         # 优化 2: 维护后台任务的强引用，防止被 GC 意外回收
         self._background_tasks = set()
+
+        routes = (
+            ("config", self.page_config, ["GET"], "Read Page configuration"),
+            ("config/save", self.page_save_config, ["POST"], "Save Page configuration"),
+            ("api/test", self.page_test_api, ["POST"], "Test an image API URL"),
+            ("status", self.page_status, ["GET"], "Read plugin runtime status"),
+            ("config/export", self.page_export_config, ["GET"], "Export Page configuration"),
+            ("config/import", self.page_import_config, ["POST"], "Preview or confirm configuration import"),
+        )
+        for suffix, handler, methods, description in routes:
+            context.register_web_api(f"/{PLUGIN_NAME}/{suffix}", handler, methods, description)
+
+    async def _close_session(self) -> None:
+        async with self._session_lock:
+            session = self._session
+            self._session = None
+            self._ssl_context = None
+            if session and not session.closed:
+                await session.close()
+
+    async def _apply_config(self, candidate: object) -> list[dict]:
+        normalized = validate_and_normalize(candidate, self._schema)
+        async with self._config_lock:
+            snapshot = copy.deepcopy(dict(self.cfg))
+            verify_ssl_changed = normalized.get("verify_ssl") != snapshot.get("verify_ssl")
+            changes = summarize_changes(snapshot, normalized)
+            self.cfg.clear()
+            self.cfg.update(copy.deepcopy(normalized))
+            try:
+                persisted = self.cfg.save_config()
+                if inspect.isawaitable(persisted):
+                    await persisted
+            except Exception:
+                self.cfg.clear()
+                self.cfg.update(snapshot)
+                raise
+            self._last_saved_at = datetime.now(timezone.utc).isoformat()
+        if verify_ssl_changed:
+            try:
+                await self._close_session()
+            except Exception as exc:
+                logger.warning(f"[随机图片] 重建网络会话失败: {exc}")
+        return changes
+
+    @staticmethod
+    def _validation_response(exc: ConfigValidationError):
+        return json_response(
+            {"status": "error", "message": "配置校验失败", "errors": exc.errors},
+            status_code=400,
+        )
+
+    async def page_config(self):
+        async with self._config_lock:
+            payload = {"config": copy.deepcopy(dict(self.cfg)), "schema": copy.deepcopy(self._schema)}
+        return json_response(payload)
+
+    async def page_save_config(self):
+        payload = await request.json(default={})
+        try:
+            changes = await self._apply_config(payload)
+            return json_response({"saved": True, "changes": changes, "saved_at": self._last_saved_at})
+        except ConfigValidationError as exc:
+            return self._validation_response(exc)
+        except Exception:
+            logger.exception("[随机图片] WebUI 配置保存失败")
+            return error_response("配置保存失败，原配置已恢复", status_code=500)
+
+    async def page_status(self):
+        session_state = "inactive"
+        if self._session is not None:
+            session_state = "closed" if self._session.closed else "active"
+        return json_response(
+            {
+                "version": PLUGIN_VERSION,
+                "source_count": len(self.cfg.get("sources", [])),
+                "cooldown_count": len(self.cooldowns),
+                "session": session_state,
+                "last_saved_at": self._last_saved_at,
+            }
+        )
+
+    async def page_export_config(self):
+        async with self._config_lock:
+            body = json.dumps(dict(self.cfg), ensure_ascii=False, indent=2).encode("utf-8")
+        export_dir = self.cache_dir / "webui"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        target = export_dir / "endworld-img-config.json"
+        temporary = export_dir / f".{uuid.uuid4().hex}.tmp"
+        temporary.write_bytes(body)
+        os.replace(temporary, target)
+        return file_response(target, filename="endworld-img-config.json", content_type="application/json")
+
+    async def page_import_config(self):
+        files = await request.files()
+        upload = files.get("file") if files else None
+        if isinstance(upload, PluginUploadFile):
+            declared_size = getattr(upload, "size", None)
+            if isinstance(declared_size, int) and declared_size > IMPORT_LIMIT_BYTES:
+                return error_response("导入文件超过 256 KiB", status_code=400)
+            import_dir = self.cache_dir / "webui" / "imports"
+            import_dir.mkdir(parents=True, exist_ok=True)
+            fd, temp_name = tempfile.mkstemp(prefix="import-", suffix=".json", dir=import_dir)
+            os.close(fd)
+            temp_path = Path(temp_name)
+            try:
+                await upload.save(temp_path)
+                if temp_path.stat().st_size > IMPORT_LIMIT_BYTES:
+                    return error_response("导入文件超过 256 KiB", status_code=400)
+                try:
+                    candidate = json.loads(temp_path.read_text(encoding="utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    return error_response("导入文件不是有效的 UTF-8 JSON", status_code=400)
+                try:
+                    normalized = validate_and_normalize(candidate, self._schema)
+                except ConfigValidationError as exc:
+                    return self._validation_response(exc)
+                async with self._config_lock:
+                    changes = summarize_changes(dict(self.cfg), normalized)
+                return json_response({"config": normalized, "changes": changes})
+            finally:
+                temp_path.unlink(missing_ok=True)
+
+        payload = await request.json(default={})
+        if not isinstance(payload, dict) or payload.get("confirm") is not True or "config" not in payload:
+            return error_response("缺少导入文件或确认数据", status_code=400)
+        try:
+            changes = await self._apply_config(payload["config"])
+            return json_response({"saved": True, "changes": changes, "saved_at": self._last_saved_at})
+        except ConfigValidationError as exc:
+            return self._validation_response(exc)
+        except Exception:
+            logger.exception("[随机图片] WebUI 导入配置保存失败")
+            return error_response("导入保存失败，原配置已恢复", status_code=500)
+
+    async def page_test_api(self):
+        payload = await request.json(default={})
+        raw_url = payload.get("url") if isinstance(payload, dict) else None
+        if not isinstance(raw_url, str) or not raw_url.strip():
+            return error_response("请输入 API 地址", status_code=400)
+        started = time.monotonic()
+        session = await self._get_session()
+        result = await self._fetch_url(session, raw_url.strip(), max_size_mb=2, redirects=3, timeout=10)
+        return json_response(
+            {
+                "ok": result.ok,
+                "status": result.status,
+                "content_type": result.content_type,
+                "final_url": result.final_url,
+                "elapsed_ms": round((time.monotonic() - started) * 1000),
+                "size": len(result.body),
+                "error": result.error,
+            }
+        )
 
     # 优化 3: 提供生命周期终止钩子，优雅释放 ClientSession 资源
     def terminate(self):
@@ -42,18 +222,19 @@ class SetuPlugin(Star):
             asyncio.create_task(self._session.close())
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            use_ssl = self.cfg.get("verify_ssl", True)
-            
-            # 优化 1: 移除冗余的三元表达式
-            self._ssl_context = ssl.create_default_context()
-            if not use_ssl:
-                self._ssl_context.check_hostname = False
-                self._ssl_context.verify_mode = ssl.CERT_NONE
-            
-            connector = aiohttp.TCPConnector(ssl=self._ssl_context)
-            self._session = aiohttp.ClientSession(connector=connector)
-        return self._session
+        async with self._session_lock:
+            if self._session is None or self._session.closed:
+                use_ssl = self.cfg.get("verify_ssl", True)
+
+                # 优化 1: 移除冗余的三元表达式
+                self._ssl_context = ssl.create_default_context()
+                if not use_ssl:
+                    self._ssl_context.check_hostname = False
+                    self._ssl_context.verify_mode = ssl.CERT_NONE
+
+                connector = aiohttp.TCPConnector(ssl=self._ssl_context)
+                self._session = aiohttp.ClientSession(connector=connector)
+            return self._session
 
     def _text(self, base_text: str) -> str:
         if self.cfg.get("catgirl_enable", False):
@@ -82,7 +263,14 @@ class SetuPlugin(Star):
     def _is_private_ip(self, ip_str: str | int) -> bool:
         try:
             ip_obj = ipaddress.ip_address(ip_str)
-            return ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast or ip_obj.is_reserved
+            return (
+                ip_obj.is_private
+                or ip_obj.is_loopback
+                or ip_obj.is_link_local
+                or ip_obj.is_multicast
+                or ip_obj.is_reserved
+                or ip_obj.is_unspecified
+            )
         except ValueError:
             return False
 
@@ -109,12 +297,14 @@ class SetuPlugin(Star):
             logger.warning(f"[随机图片] 域名解析超时: {hostname}")
             return False # 出于安全考虑，超时默认拦截
         except Exception as e:
-            logger.debug(f"[随机图片] 域名解析失败，回退交由底层处理: {e}")
-            return True
+            logger.warning(f"[随机图片] 域名解析失败并已拦截: {e}")
+            return False
 
     async def _is_safe_url(self, url: str) -> bool:
         try:
             parsed = urlparse(url)
+            if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+                return False
             hostname = parsed.hostname
             if not hostname: 
                 return False
@@ -173,52 +363,83 @@ class SetuPlugin(Star):
             logger.warning(f"[随机图片] 压缩失败，回退使用原图: {e}")
             return image_data 
 
-    async def _safe_fetch(self, session: aiohttp.ClientSession, url: str, max_size_mb: int = 20, redirects: int = 3) -> tuple[bytes, str, str]:
+    async def _fetch_url(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        max_size_mb: int = 20,
+        redirects: int = 3,
+        timeout: float = 20,
+    ) -> FetchResult:
         if redirects < 0:
-            return b"", "", url
-
+            return FetchResult(False, None, "", url, b"", "重定向次数超过限制")
         if not await self._is_safe_url(url):
             logger.warning(f"[随机图片] 拦截针对非法地址的请求: {url}")
-            return b"", "", url
-        
+            return FetchResult(False, None, "", url, b"", "地址未通过安全检查")
+
         separator = "&" if "?" in url else "?"
         no_cache_url = f"{url}{separator}_t={int(time.time() * 1000)}"
-        
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Cache-Control": "no-cache",
-            "Pragma": "no-cache"
+            "Pragma": "no-cache",
         }
-
         try:
-            async with session.get(no_cache_url, headers=headers, allow_redirects=False, timeout=20) as response:
+            async with session.get(
+                no_cache_url,
+                headers=headers,
+                allow_redirects=False,
+                timeout=timeout,
+            ) as response:
+                final_url = str(response.url)
                 if response.status in (301, 302, 303, 307, 308):
                     location = response.headers.get("Location")
-                    if location:
-                        new_url = urljoin(str(response.url), location)
-                        return await self._safe_fetch(session, new_url, max_size_mb, redirects - 1)
-                        
-                if response.status != 200:
-                    return b"", "", url
-                    
+                    if not location:
+                        return FetchResult(False, response.status, "", final_url, b"", "重定向缺少目标地址")
+                    new_url = urljoin(final_url, location)
+                    if redirects == 0:
+                        return FetchResult(False, response.status, "", final_url, b"", "重定向次数超过限制")
+                    return await self._fetch_url(session, new_url, max_size_mb, redirects - 1, timeout)
+
                 content_type = response.headers.get("Content-Type", "").lower()
-                final_url = str(response.url)
-                body = b""
+                if response.status != 200:
+                    return FetchResult(False, response.status, content_type, final_url, b"", f"HTTP {response.status}")
+
                 max_bytes = max_size_mb * 1024 * 1024
-                
+                content_length = response.headers.get("Content-Length")
+                if content_length:
+                    try:
+                        if int(content_length) > max_bytes:
+                            return FetchResult(False, response.status, content_type, final_url, b"", "响应大小超过限制")
+                    except ValueError:
+                        pass
+                chunks = bytearray()
                 while True:
                     chunk = await response.content.read(8192)
-                    if not chunk: 
+                    if not chunk:
                         break
-                    body += chunk
-                    if len(body) > max_bytes:
+                    chunks.extend(chunk)
+                    if len(chunks) > max_bytes:
                         logger.warning(f"[随机图片] 数据流大小超出安全限制 ({max_size_mb}MB)")
-                        return b"", "", final_url
-                return body, content_type, final_url
-        except Exception as e: 
-            logger.debug(f"[随机图片] Fetch 网络请求异常: {e}")
-            
-        return b"", "", url
+                        return FetchResult(False, response.status, content_type, final_url, b"", "响应大小超过限制")
+                return FetchResult(True, response.status, content_type, final_url, bytes(chunks), None)
+        except (asyncio.TimeoutError, TimeoutError):
+            return FetchResult(False, None, "", url, b"", "请求超时")
+        except Exception as exc:
+            logger.debug(f"[随机图片] Fetch 网络请求异常: {exc}")
+            return FetchResult(False, None, "", url, b"", "网络请求失败")
+
+    async def _safe_fetch(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        max_size_mb: int = 20,
+        redirects: int = 3,
+    ) -> tuple[bytes, str, str]:
+        result = await self._fetch_url(session, url, max_size_mb, redirects)
+        if not result.ok:
+            return b"", "", result.final_url
+        return result.body, result.content_type, result.final_url
 
     # 优化 4: 解耦 OneBot 协议的防风控逻辑，净化主发送接口
     async def _try_onebot_forward(self, event: AstrMessageEvent, obmsg: list, use_forward: bool) -> bool | None:

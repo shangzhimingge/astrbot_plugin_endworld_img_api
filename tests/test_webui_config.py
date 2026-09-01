@@ -46,6 +46,12 @@ class WebUIConfigTests(unittest.TestCase):
         result = validate_and_normalize(candidate, self.schema)
         self.assertEqual([item["name"] for item in result["sources"]], ["first", "second"])
 
+    def test_template_key_is_optional_and_regenerated(self):
+        candidate = copy.deepcopy(self.valid)
+        candidate["sources"][0].pop("__template_key")
+        result = validate_and_normalize(candidate, self.schema)
+        self.assertEqual(result["sources"][0]["__template_key"], "default_source")
+
     def test_unknown_and_missing_keys_are_rejected(self):
         for mutation, expected in (
             (lambda data: data.update({"mystery": True}), "mystery"),

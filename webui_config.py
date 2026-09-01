@@ -93,7 +93,10 @@ def _validate_sources(value: Any, rule: dict[str, Any], path: str, errors: dict[
         if not isinstance(source, dict):
             errors[source_path] = "图源必须是对象"
             continue
-        _check_exact_keys(source, allowed, source_path, errors)
+        for key in sorted(set(source) - allowed):
+            errors[f"{source_path}.{key}"] = "未知配置项"
+        for key in sorted(set(items) - set(source)):
+            errors[f"{source_path}.{key}"] = "缺少配置项"
         normalized: dict[str, Any] = {"__template_key": "default_source"}
         for key, item_rule in items.items():
             if key in source:
