@@ -40,6 +40,26 @@ class PageStaticTests(unittest.TestCase):
         self.assertGreaterEqual(javascript.count('if (result.saved === false)'), 3)
         self.assertIn("showErrors(result.errors)", javascript)
 
+    def test_source_deletion_uses_accessible_inline_dialog(self):
+        html = (ROOT / "pages/settings/index.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "pages/settings/app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("window.confirm", javascript)
+        self.assertIn('id="deleteSourceDialog"', html)
+        self.assertIn('aria-labelledby="deleteSourceTitle"', html)
+        self.assertIn('id="confirmDeleteSource"', html)
+
+    def test_validation_summary_and_blue_pink_theme_are_present(self):
+        html = (ROOT / "pages/settings/index.html").read_text(encoding="utf-8")
+        css = (ROOT / "pages/settings/style.css").read_text(encoding="utf-8")
+        javascript = (ROOT / "pages/settings/app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="errorSummary"', html)
+        self.assertIn("配置校验失败，共", javascript)
+        self.assertIn("--accent-blue:", css)
+        self.assertIn("--accent-pink:", css)
+        self.assertIn("linear-gradient", css)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,3 +1,11 @@
+import {
+  addSourceUi,
+  createSourceUi,
+  markSourcesSaved,
+  moveSourceUi,
+  removeSourceUi,
+} from "./source-ui-state.mjs";
+
 const bridge = window.AstrBotPluginPage;
 const state = {
   schema: null,
@@ -6,6 +14,8 @@ const state = {
   pendingImport: null,
   controls: new Map(),
   saving: false,
+  sourceUi: null,
+  pendingDeleteId: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -19,6 +29,9 @@ const elements = {
   dialog: $("#importDialog"),
   importChanges: $("#importChanges"),
   importFile: $("#importFile"),
+  errorSummary: $("#errorSummary"),
+  deleteDialog: $("#deleteSourceDialog"),
+  deleteSourceName: $("#deleteSourceName"),
 };
 
 function node(tag, className, text) {
@@ -56,19 +69,35 @@ function clearErrors() {
     control.removeAttribute("aria-invalid");
     error.textContent = "";
   }
+  elements.errorSummary.hidden = true;
+  elements.errorSummary.textContent = "";
 }
 
 function showErrors(errors = {}) {
   clearErrors();
+  const entries = Object.entries(errors);
+  if (!entries.length) return;
+  elements.errorSummary.hidden = false;
+  elements.errorSummary.textContent = `配置校验失败，共 ${entries.length} 项。请检查标出的字段。`;
   let first = null;
-  for (const [path, message] of Object.entries(errors)) {
+  for (const [path, message] of entries) {
     const target = state.controls.get(path) || state.controls.get(path.replace(/\[\d+\]$/, ""));
     if (!target) continue;
+    const sourceMatch = path.match(/^sources\[(\d+)\]/);
+    if (sourceMatch) {
+      const sourceId = state.sourceUi?.ids[Number(sourceMatch[1])];
+      if (sourceId) {
+        state.sourceUi.openIds.add(sourceId);
+        const card = document.querySelector(`[data-source-id="${sourceId}"]`);
+        if (card) card.open = true;
+      }
+    }
     target.control.setAttribute("aria-invalid", "true");
     target.error.textContent = message;
     first ||= target.control;
   }
-  first?.focus();
+  (first || elements.errorSummary).focus();
+  (first || elements.errorSummary).scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
 function getErrorPayload(error) {
@@ -244,8 +273,14 @@ function renderSources() {
   for (const key of [...state.controls.keys()]) if (key.startsWith("sources")) state.controls.delete(key);
   const sourceRules = state.schema.sources.templates.default_source.items;
   const cards = state.draft.sources.map((source, index) => {
+    const sourceId = state.sourceUi.ids[index];
     const details = node("details", "source-card");
-    details.open = index === 0;
+    details.dataset.sourceId = sourceId;
+    details.open = state.sourceUi.openIds.has(sourceId);
+    details.addEventListener("toggle", () => {
+      if (details.open) state.sourceUi.openIds.add(sourceId);
+      else state.sourceUi.openIds.delete(sourceId);
+    });
     const summary = document.createElement("summary");
     const summaryText = node("span", "source-summary", `${index + 1}. ${source.name || "未命名图源"}`);
     summaryText.dataset.sourceSummary = index;
@@ -276,10 +311,14 @@ function renderSources() {
         changed("至少保留一个图源。");
         return;
       }
-      if (!window.confirm(`删除图源“${source.name || "未命名"}”？`)) return;
-      state.draft.sources.splice(index, 1);
-      renderSources();
-      changed();
+      if (state.sourceUi.newIds.has(sourceId)) {
+        deleteSource(sourceId);
+        return;
+      }
+      state.pendingDeleteId = sourceId;
+      elements.deleteSourceName.textContent = source.name || "未命名图源";
+      elements.deleteDialog.showModal();
+      $("#confirmDeleteSource").focus();
     });
     actions.append(up, down, remove);
     body.append(actions);
@@ -292,6 +331,17 @@ function renderSources() {
 function moveSource(index, offset) {
   const [source] = state.draft.sources.splice(index, 1);
   state.draft.sources.splice(index + offset, 0, source);
+  moveSourceUi(state.sourceUi, index, offset);
+  renderSources();
+  changed();
+}
+
+function deleteSource(sourceId) {
+  const index = state.sourceUi.ids.indexOf(sourceId);
+  if (index < 0 || state.draft.sources.length === 1) return;
+  state.draft.sources.splice(index, 1);
+  removeSourceUi(state.sourceUi, index);
+  state.pendingDeleteId = null;
   renderSources();
   changed();
 }
@@ -347,7 +397,12 @@ async function saveDraft() {
       changed(result.message || "请修正标出的配置项。");
       return;
     }
-    state.baseline = clone(state.draft);
+    const savedConfig = clone(result.config || state.draft);
+    state.baseline = clone(savedConfig);
+    state.draft = savedConfig;
+    markSourcesSaved(state.sourceUi);
+    renderTopFields();
+    renderSources();
     changed(`保存成功，共 ${result.changes?.length || 0} 项变更。`);
     await refreshStatus();
   } catch (error) {
@@ -395,8 +450,11 @@ async function confirmImport() {
       changed(result.message || "导入配置存在字段错误。");
       return;
     }
-    state.baseline = clone(state.pendingImport);
-    state.draft = clone(state.pendingImport);
+    const savedConfig = clone(result.config || state.pendingImport);
+    state.baseline = clone(savedConfig);
+    state.draft = savedConfig;
+    state.sourceUi = createSourceUi(state.draft.sources);
+    markSourcesSaved(state.sourceUi);
     state.pendingImport = null;
     renderTopFields();
     renderSources();
@@ -421,6 +479,7 @@ async function initialize() {
     state.schema = data.schema;
     state.baseline = clone(data.config);
     state.draft = clone(data.config);
+    state.sourceUi = createSourceUi(state.draft.sources);
     renderTopFields();
     renderSources();
     updateDirtyUI();
@@ -433,8 +492,10 @@ async function initialize() {
 $("#addSource").addEventListener("click", () => {
   if (!state.draft || !state.schema) return;
   state.draft.sources.push(newSource());
+  addSourceUi(state.sourceUi);
   renderSources();
   changed();
+  state.controls.get(`sources[${state.draft.sources.length - 1}].name`)?.control.focus();
 });
 $("#refreshStatus").addEventListener("click", refreshStatus);
 $("#saveTop").addEventListener("click", saveDraft);
@@ -449,6 +510,13 @@ $("#exportConfig").addEventListener("click", async () => {
 });
 elements.importFile.addEventListener("change", () => previewImport(elements.importFile.files[0]));
 $("#confirmImport").addEventListener("click", confirmImport);
+$("#confirmDeleteSource").addEventListener("click", () => {
+  if (state.pendingDeleteId) deleteSource(state.pendingDeleteId);
+  elements.deleteDialog.close();
+});
+elements.deleteDialog.addEventListener("close", () => {
+  state.pendingDeleteId = null;
+});
 window.addEventListener("beforeunload", (event) => {
   if (!isDirty()) return;
   event.preventDefault();

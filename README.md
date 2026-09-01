@@ -4,7 +4,7 @@
 
 <img src="https://count.getloli.com/@astrbot_plugin_endworld_img_api?name=astrbot_plugin_endworld_img_api&theme=booru-jaypee&padding=7&offset=0&align=center&scale=1&pixelated=0&darkmode=auto" alt="count" />
 
-[![Version](https://img.shields.io/badge/version-v6.5.0-blue.svg)](https://github.com/shangzhimingge/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.24.1-orange.svg)](https://github.com/AstrBotDevs/AstrBot) [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/version-v6.5.1-blue.svg)](https://github.com/shangzhimingge/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.24.1-orange.svg)](https://github.com/AstrBotDevs/AstrBot) [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
 一个为 AstrBot 打造的**高并发、强安全**的自定义 API 随机图片分发插件。
 
@@ -48,8 +48,10 @@ pip install aiofiles aiohttp Pillow
 * **状态概览**：查看插件版本、图源数量、冷却记录、网络会话与最近保存时间。
 * **导入与导出**：导入 UTF-8 JSON 后先显示变更预览，确认后才写入；也可下载当前完整配置。
 * **保存保护**：后端会再次校验所有字段，保存失败时恢复原配置；离开页面前会提示尚未保存的更改。
+* **升级兼容**：旧版多余字段会自动清理，新增字段按 schema 默认值补齐；已填写字段仍执行严格校验。
+* **稳定编辑体验**：列表增删和图源排序不会折叠已展开卡片；新图源直接删除，已保存图源使用页面内确认对话框。
 
-页面会跟随 AstrBot 的亮色/暗色主题，并适配窄屏与键盘操作。新增 Page 后需重载一次插件；静态页面更新通常刷新即可。
+页面使用中等饱和度蓝粉渐变主题，跟随 AstrBot 的亮色/暗色模式，并适配窄屏与键盘操作。新增 Page 后需重载一次插件；静态页面更新通常刷新即可。
 
 ### 1. 添加与管理图源
 
@@ -89,7 +91,7 @@ pip install aiofiles aiohttp Pillow
 
 ## 🛠️ 开发维护
 
-* **版本号**：v6.5.0
+* **版本号**：v6.5.1
 * **衍生自**：[mccloud_img](https://github.com/MCYUNIDC/mccloud_img) (Author: MC云)
 * **重构作者**：殇之冥歌
 * **核心依赖**：`AstrBot Core v4.24.1+`

@@ -52,16 +52,37 @@ class WebUIConfigTests(unittest.TestCase):
         result = validate_and_normalize(candidate, self.schema)
         self.assertEqual(result["sources"][0]["__template_key"], "default_source")
 
-    def test_unknown_and_missing_keys_are_rejected(self):
-        for mutation, expected in (
-            (lambda data: data.update({"mystery": True}), "mystery"),
-            (lambda data: data.pop("cooldown"), "cooldown"),
-        ):
-            candidate = copy.deepcopy(self.valid)
-            mutation(candidate)
-            with self.assertRaises(ConfigValidationError) as caught:
-                validate_and_normalize(candidate, self.schema)
-            self.assertIn(expected, caught.exception.errors)
+    def test_unknown_top_level_keys_are_removed_and_missing_keys_use_defaults(self):
+        candidate = copy.deepcopy(self.valid)
+        candidate["mystery"] = {"legacy": True}
+        candidate.pop("cooldown")
+
+        result = validate_and_normalize(candidate, self.schema)
+
+        self.assertNotIn("mystery", result)
+        self.assertEqual(result["cooldown"], self.schema["cooldown"]["default"])
+
+    def test_unknown_source_keys_are_removed_and_missing_source_keys_use_defaults(self):
+        candidate = copy.deepcopy(self.valid)
+        source = candidate["sources"][0]
+        source["legacy_field"] = "old"
+        source.pop("recall_delay")
+        source.pop("group_list")
+
+        result = validate_and_normalize(candidate, self.schema)
+
+        normalized = result["sources"][0]
+        self.assertNotIn("legacy_field", normalized)
+        self.assertEqual(normalized["recall_delay"], 0)
+        self.assertEqual(normalized["group_list"], [])
+
+    def test_defaults_are_deep_copied_when_fields_are_missing(self):
+        first = validate_and_normalize({}, self.schema)
+        first["sources"][0]["keywords"].append("mutated")
+
+        second = validate_and_normalize({}, self.schema)
+
+        self.assertNotIn("mutated", second["sources"][0]["keywords"])
 
     def test_bool_does_not_pass_as_int_and_ranges_apply(self):
         invalid = (("cooldown", True), ("compress_quality", 0), ("compress_quality", 101))

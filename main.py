@@ -30,7 +30,7 @@ from .webui_config import ConfigValidationError, load_schema, summarize_changes,
 
 
 PLUGIN_NAME = "astrbot_plugin_endworld_img_api"
-PLUGIN_VERSION = "6.5.0"
+PLUGIN_VERSION = "6.5.1"
 IMPORT_LIMIT_BYTES = 256 * 1024
 
 
@@ -102,7 +102,7 @@ class SetuPlugin(Star):
             async with self._session_lock:
                 await self._retire_current_session_locked()
 
-    async def _apply_config(self, candidate: object) -> list[dict]:
+    async def _apply_config(self, candidate: object) -> tuple[list[dict], dict]:
         normalized = validate_and_normalize(candidate, self._schema)
         async with self._config_lock:
             snapshot = copy.deepcopy(dict(self.cfg))
@@ -122,7 +122,7 @@ class SetuPlugin(Star):
             if verify_ssl_changed:
                 async with self._session_lock:
                     await self._retire_current_session_locked()
-        return changes
+        return changes, copy.deepcopy(normalized)
 
     @staticmethod
     def _validation_response(exc: ConfigValidationError):
@@ -132,14 +132,22 @@ class SetuPlugin(Star):
 
     async def page_config(self):
         async with self._config_lock:
-            payload = {"config": copy.deepcopy(dict(self.cfg)), "schema": copy.deepcopy(self._schema)}
+            current = copy.deepcopy(dict(self.cfg))
+            try:
+                current = validate_and_normalize(current, self._schema)
+            except ConfigValidationError:
+                # Keep known invalid values visible so the editor can show and repair them.
+                pass
+            payload = {"config": current, "schema": copy.deepcopy(self._schema)}
         return json_response(payload)
 
     async def page_save_config(self):
         payload = await request.json(default={})
         try:
-            changes = await self._apply_config(payload)
-            return json_response({"saved": True, "changes": changes, "saved_at": self._last_saved_at})
+            changes, normalized = await self._apply_config(payload)
+            return json_response(
+                {"saved": True, "changes": changes, "config": normalized, "saved_at": self._last_saved_at}
+            )
         except ConfigValidationError as exc:
             return self._validation_response(exc)
         except Exception:
@@ -205,8 +213,10 @@ class SetuPlugin(Star):
         if not isinstance(payload, dict) or payload.get("confirm") is not True or "config" not in payload:
             return error_response("缺少导入文件或确认数据", status_code=400)
         try:
-            changes = await self._apply_config(payload["config"])
-            return json_response({"saved": True, "changes": changes, "saved_at": self._last_saved_at})
+            changes, normalized = await self._apply_config(payload["config"])
+            return json_response(
+                {"saved": True, "changes": changes, "config": normalized, "saved_at": self._last_saved_at}
+            )
         except ConfigValidationError as exc:
             return self._validation_response(exc)
         except Exception:

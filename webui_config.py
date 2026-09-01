@@ -25,13 +25,6 @@ def load_schema() -> dict[str, Any]:
     return schema
 
 
-def _check_exact_keys(value: dict[str, Any], allowed: set[str], path: str, errors: dict[str, str]) -> None:
-    for key in sorted(set(value) - allowed):
-        errors[f"{path}.{key}" if path else key] = "未知配置项"
-    for key in sorted(allowed - set(value)):
-        errors[f"{path}.{key}" if path else key] = "缺少配置项"
-
-
 def _validate_scalar(value: Any, rule: dict[str, Any], path: str, errors: dict[str, str]) -> Any:
     kind = rule.get("type")
     if kind == "bool":
@@ -86,21 +79,16 @@ def _validate_sources(value: Any, rule: dict[str, Any], path: str, errors: dict[
         return []
     template = rule.get("templates", {}).get("default_source", {})
     items = template.get("items", {})
-    allowed = set(items) | {"__template_key"}
     normalized_sources: list[dict[str, Any]] = []
     for index, source in enumerate(value):
         source_path = f"{path}[{index}]"
         if not isinstance(source, dict):
             errors[source_path] = "图源必须是对象"
             continue
-        for key in sorted(set(source) - allowed):
-            errors[f"{source_path}.{key}"] = "未知配置项"
-        for key in sorted(set(items) - set(source)):
-            errors[f"{source_path}.{key}"] = "缺少配置项"
         normalized: dict[str, Any] = {"__template_key": "default_source"}
         for key, item_rule in items.items():
-            if key in source:
-                normalized[key] = _validate_scalar(source[key], item_rule, f"{source_path}.{key}", errors)
+            raw_value = source[key] if key in source else copy.deepcopy(item_rule.get("default"))
+            normalized[key] = _validate_scalar(raw_value, item_rule, f"{source_path}.{key}", errors)
         if not normalized.get("name"):
             errors[f"{source_path}.name"] = "图源名称不得为空"
         if not normalized.get("keywords"):
@@ -123,15 +111,13 @@ def validate_and_normalize(candidate: Any, schema: dict[str, Any] | None = None)
     if not isinstance(candidate, dict):
         raise ConfigValidationError({"config": "配置必须是对象"})
     errors: dict[str, str] = {}
-    _check_exact_keys(candidate, set(schema), "", errors)
     normalized: dict[str, Any] = {}
     for key, rule in schema.items():
-        if key not in candidate:
-            continue
+        raw_value = candidate[key] if key in candidate else copy.deepcopy(rule.get("default"))
         if rule.get("type") == "template_list":
-            normalized[key] = _validate_sources(candidate[key], rule, key, errors)
+            normalized[key] = _validate_sources(raw_value, rule, key, errors)
         else:
-            normalized[key] = _validate_scalar(candidate[key], rule, key, errors)
+            normalized[key] = _validate_scalar(raw_value, rule, key, errors)
     if errors:
         raise ConfigValidationError(errors)
     return copy.deepcopy(normalized)

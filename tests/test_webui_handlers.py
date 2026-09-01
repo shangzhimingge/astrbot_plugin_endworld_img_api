@@ -211,6 +211,20 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(self.config["sources"][0]["name"], "changed")
         self.assertIn("schema", response["data"])
 
+    async def test_config_read_cleans_legacy_keys_and_fills_missing_defaults(self):
+        self.config["legacy_field"] = "old"
+        self.config.pop("cooldown")
+        self.config["sources"][0]["legacy_source_field"] = "old"
+        self.config["sources"][0].pop("group_list")
+
+        response = await self.plugin.page_config()
+
+        loaded = response["data"]["config"]
+        self.assertNotIn("legacy_field", loaded)
+        self.assertNotIn("legacy_source_field", loaded["sources"][0])
+        self.assertEqual(loaded["cooldown"], load_schema()["cooldown"]["default"])
+        self.assertEqual(loaded["sources"][0]["group_list"], [])
+
     async def test_save_preserves_identity_and_persists_once(self):
         candidate = default_config()
         candidate["cooldown"] = 42
@@ -222,6 +236,17 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.config["cooldown"], 42)
         self.assertEqual(self.config.calls, 1)
         self.assertTrue(response["data"]["changes"])
+
+    async def test_save_returns_the_normalized_configuration(self):
+        candidate = default_config()
+        candidate["legacy_field"] = True
+        candidate.pop("cooldown")
+        fake_request.payload = candidate
+
+        response = await self.plugin.page_save_config()
+
+        self.assertNotIn("legacy_field", response["data"]["config"])
+        self.assertEqual(response["data"]["config"]["cooldown"], load_schema()["cooldown"]["default"])
 
     async def test_save_rolls_back_when_persistence_fails(self):
         failing = SaveConfig(default_config(), fail=True)
@@ -278,7 +303,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(exported["path"].read_text(encoding="utf-8")), dict(self.config))
         self.plugin.cooldowns["u"] = 1.0
         status = await self.plugin.page_status()
-        self.assertEqual(status["data"]["version"], "6.5.0")
+        self.assertEqual(status["data"]["version"], "6.5.1")
         self.assertEqual(status["data"]["source_count"], len(self.config["sources"]))
         self.assertEqual(status["data"]["cooldown_count"], 1)
 
