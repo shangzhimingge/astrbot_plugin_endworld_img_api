@@ -117,12 +117,15 @@
     "compress_quality": {
         "type": "int",
         "description": "压缩质量 (1-100)",
-        "default": 85
+        "default": 85,
+        "minimum": 1,
+        "maximum": 100
     },
     "cooldown": {
         "type": "int",
         "description": "全局指令冷却时间 (秒)",
-        "default": 10
+        "default": 10,
+        "minimum": 0
     },
     "verify_ssl": {
         "type": "bool",
