@@ -99,7 +99,8 @@ function createTopField(key, rule) {
     state.draft[key] = rule.type === "bool" ? control.checked : rule.type === "int" ? Number(control.value) : control.value;
     changed();
   });
-  wrapper.append(label, control);
+  if (rule.type === "bool") wrapper.append(label);
+  else wrapper.append(label, control);
   if (rule.hint) wrapper.append(node("p", "field-hint", rule.hint));
   wrapper.append(fieldError(key, control));
   return wrapper;
@@ -149,10 +150,11 @@ function listEditor(sourceIndex, key, title, { api = false } = {}) {
       changed();
     });
     row.append(input);
+    let diagnostic = null;
     if (api) {
       const test = node("button", "button small test-api", "检测");
       test.type = "button";
-      const diagnostic = node("p", "diagnostic");
+      diagnostic = node("p", "diagnostic");
       diagnostic.setAttribute("role", "status");
       diagnostic.setAttribute("aria-live", "polite");
       test.addEventListener("click", async () => {
@@ -173,7 +175,6 @@ function listEditor(sourceIndex, key, title, { api = false } = {}) {
         }
       });
       row.append(test);
-      row.append(diagnostic);
     }
     const remove = node("button", "button small danger delete-row", "删除");
     remove.type = "button";
@@ -183,6 +184,7 @@ function listEditor(sourceIndex, key, title, { api = false } = {}) {
       changed();
     });
     row.append(remove);
+    if (diagnostic) row.append(diagnostic);
     row.append(fieldError(path, input));
     rows.append(row);
   });
@@ -226,7 +228,8 @@ function sourceField(sourceIndex, key, rule) {
     changed();
     if (key === "name") renderSourceSummary(sourceIndex);
   });
-  wrapper.append(label, control);
+  if (rule.type === "bool") wrapper.append(label);
+  else wrapper.append(label, control);
   if (rule.hint) wrapper.append(node("p", "field-hint", rule.hint));
   wrapper.append(fieldError(path, control));
   return wrapper;

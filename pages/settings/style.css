@@ -146,6 +146,7 @@ input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--da
 .list-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; }
 .api-row { grid-template-columns: minmax(0, 1fr) auto auto; }
 .api-row .diagnostic { grid-column: 1 / -1; min-height: 1.2em; margin: -3px 0 0; color: var(--muted); font-size: 0.82rem; }
+.api-row .error-text { grid-column: 1 / -1; }
 .diagnostic.success { color: var(--accent-strong); }
 .diagnostic.failure { color: var(--danger); }
 .empty-note { margin: 0; color: var(--muted); font-style: italic; }
