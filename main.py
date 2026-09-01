@@ -26,7 +26,7 @@ from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger 
 from astrbot.api.web import PluginUploadFile, error_response, file_response, json_response, request
 
-from webui_config import ConfigValidationError, load_schema, summarize_changes, validate_and_normalize
+from .webui_config import ConfigValidationError, load_schema, summarize_changes, validate_and_normalize
 
 
 PLUGIN_NAME = "astrbot_plugin_endworld_img_api"

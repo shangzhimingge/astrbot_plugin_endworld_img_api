@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import importlib
 import json
 import sys
 import tempfile
@@ -118,9 +119,43 @@ def install_astrbot_fakes(data_dir):
 
 _module_temp = tempfile.TemporaryDirectory()
 install_astrbot_fakes(_module_temp.name)
-sys.modules.pop("main", None)
-import main
-from webui_config import load_schema
+_repository_parent = str(Path(__file__).resolve().parents[2])
+if _repository_parent not in sys.path:
+    sys.path.insert(0, _repository_parent)
+main = importlib.import_module("astrbot_plugin_endworld_img_api.main")
+from astrbot_plugin_endworld_img_api.webui_config import load_schema
+
+
+class PackageImportTests(unittest.TestCase):
+    def test_main_loads_from_astrbot_plugin_package(self):
+        plugin_root = Path(__file__).resolve().parents[1]
+        package_name = "astrbot_plugin_endworld_img_api_package_test"
+        module_name = f"{package_name}.main"
+        package = types.ModuleType(package_name)
+        package.__path__ = [str(plugin_root)]
+
+        original_path = sys.path[:]
+        original_webui_config = sys.modules.pop("webui_config", None)
+        sys.modules[package_name] = package
+        try:
+            sys.path = [
+                entry
+                for entry in sys.path
+                if Path(entry or ".").resolve() != plugin_root
+            ]
+            with tempfile.TemporaryDirectory() as data_dir:
+                install_astrbot_fakes(data_dir)
+                spec = importlib.util.spec_from_file_location(module_name, plugin_root / "main.py")
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = module
+                spec.loader.exec_module(module)
+            self.assertTrue(hasattr(module, "SetuPlugin"))
+        finally:
+            sys.path = original_path
+            sys.modules.pop(module_name, None)
+            sys.modules.pop(package_name, None)
+            if original_webui_config is not None:
+                sys.modules["webui_config"] = original_webui_config
 
 
 class FakeContext:
