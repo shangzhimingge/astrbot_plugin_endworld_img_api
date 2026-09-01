@@ -200,6 +200,20 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dict(failing), before)
         self.assertEqual(failing.calls, 1)
 
+    async def test_validation_errors_are_a_bridge_readable_business_response(self):
+        before = copy.deepcopy(self.config)
+        candidate = default_config()
+        candidate["cooldown"] = -1
+        fake_request.payload = candidate
+
+        response = await self.plugin.page_save_config()
+
+        self.assertEqual(response["status"], 200)
+        self.assertFalse(response["data"]["saved"])
+        self.assertEqual(response["data"]["errors"]["cooldown"], "不得小于 0")
+        self.assertEqual(dict(self.config), before)
+        self.assertEqual(self.config.calls, 0)
+
     async def test_import_preview_does_not_apply_and_confirm_does(self):
         candidate = default_config()
         candidate["cooldown"] = 77
@@ -247,6 +261,44 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         await self.plugin.page_save_config()
         session.close.assert_awaited_once()
         self.assertIsNone(self.plugin._session)
+
+    async def test_ssl_change_retires_but_does_not_interrupt_inflight_session(self):
+        old_session = types.SimpleNamespace(closed=False, close=AsyncMock())
+        new_session = types.SimpleNamespace(closed=False, close=AsyncMock())
+        self.plugin._session = old_session
+        fetch_started = asyncio.Event()
+        release_fetch = asyncio.Event()
+
+        async def slow_fetch(session, *_args, **_kwargs):
+            self.assertIs(session, old_session)
+            fetch_started.set()
+            await release_fetch.wait()
+            old_session.close.assert_not_awaited()
+            return main.FetchResult(True, 200, "image/png", "https://example.com/a", b"ok", None)
+
+        fake_request.payload = {"url": "https://example.com/unsaved"}
+        with patch.object(self.plugin, "_fetch_url", side_effect=slow_fetch):
+            inflight = asyncio.create_task(self.plugin.page_test_api())
+            await asyncio.wait_for(fetch_started.wait(), timeout=1)
+
+            candidate = default_config()
+            candidate["verify_ssl"] = not candidate["verify_ssl"]
+            fake_request.payload = candidate
+            saved = await self.plugin.page_save_config()
+            self.assertTrue(saved["data"]["saved"])
+            old_session.close.assert_not_awaited()
+            self.assertIsNone(self.plugin._session)
+
+            with patch.object(main.aiohttp, "ClientSession", return_value=new_session):
+                acquired = await self.plugin._get_session()
+            self.assertIs(acquired, new_session)
+
+            release_fetch.set()
+            response = await asyncio.wait_for(inflight, timeout=1)
+
+        self.assertTrue(response["data"]["ok"])
+        old_session.close.assert_awaited_once()
+        self.assertIs(self.plugin._session, new_session)
 
     async def test_api_test_uses_supplied_value_without_persistence(self):
         fake_request.payload = {"url": "https://example.com/unsaved"}

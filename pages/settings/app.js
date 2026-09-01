@@ -365,6 +365,11 @@ async function previewImport(file) {
   changed("正在读取导入文件…");
   try {
     const result = await bridge.upload("config/import", file);
+    if (result.saved === false) {
+      showErrors(result.errors);
+      changed(result.message || "导入配置存在字段错误。");
+      return;
+    }
     state.pendingImport = result.config;
     const changes = result.changes || [];
     elements.importChanges.replaceChildren(...(changes.length
@@ -385,6 +390,11 @@ async function confirmImport() {
   $("#confirmImport").disabled = true;
   try {
     const result = await bridge.apiPost("config/import", { config: state.pendingImport, confirm: true });
+    if (result.saved === false) {
+      showErrors(result.errors);
+      changed(result.message || "导入配置存在字段错误。");
+      return;
+    }
     state.baseline = clone(state.pendingImport);
     state.draft = clone(state.pendingImport);
     state.pendingImport = null;

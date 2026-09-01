@@ -5,4 +5,4 @@ help: 使用自定义指令获取图片。请在配置中设置正确的API地�
 version: v6.5.0 # 插件版本号
 author: 殇之冥歌
 repo: https://github.com/shangzhimingge/astrbot_plugin_endworld_img_api
-astrbot_version: ">=4.17.0"
+astrbot_version: ">=4.24.1"

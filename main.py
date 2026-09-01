@@ -14,6 +14,7 @@ import mimetypes
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 from io import BytesIO
 from urllib.parse import urlparse, urljoin
 from pathlib import Path 
@@ -55,6 +56,8 @@ class SetuPlugin(Star):
             
         self._session: aiohttp.ClientSession | None = None
         self._ssl_context: ssl.SSLContext | None = None
+        self._session_users: dict[int, int] = {}
+        self._retired_sessions: dict[int, aiohttp.ClientSession] = {}
         self._config_lock = asyncio.Lock()
         self._session_lock = asyncio.Lock()
         self._last_saved_at: str | None = None
@@ -74,13 +77,30 @@ class SetuPlugin(Star):
         for suffix, handler, methods, description in routes:
             context.register_web_api(f"/{PLUGIN_NAME}/{suffix}", handler, methods, description)
 
-    async def _close_session(self) -> None:
-        async with self._session_lock:
-            session = self._session
-            self._session = None
-            self._ssl_context = None
-            if session and not session.closed:
+    async def _close_retired_session_locked(self, session_key: int) -> None:
+        session = self._retired_sessions.pop(session_key, None)
+        self._session_users.pop(session_key, None)
+        if session and not session.closed:
+            try:
                 await session.close()
+            except Exception as exc:
+                logger.warning(f"[随机图片] 关闭旧网络会话失败: {exc}")
+
+    async def _retire_current_session_locked(self) -> None:
+        session = self._session
+        self._session = None
+        self._ssl_context = None
+        if session is None:
+            return
+        session_key = id(session)
+        self._retired_sessions[session_key] = session
+        if self._session_users.get(session_key, 0) == 0:
+            await self._close_retired_session_locked(session_key)
+
+    async def _close_session(self) -> None:
+        async with self._config_lock:
+            async with self._session_lock:
+                await self._retire_current_session_locked()
 
     async def _apply_config(self, candidate: object) -> list[dict]:
         normalized = validate_and_normalize(candidate, self._schema)
@@ -99,18 +119,15 @@ class SetuPlugin(Star):
                 self.cfg.update(snapshot)
                 raise
             self._last_saved_at = datetime.now(timezone.utc).isoformat()
-        if verify_ssl_changed:
-            try:
-                await self._close_session()
-            except Exception as exc:
-                logger.warning(f"[随机图片] 重建网络会话失败: {exc}")
+            if verify_ssl_changed:
+                async with self._session_lock:
+                    await self._retire_current_session_locked()
         return changes
 
     @staticmethod
     def _validation_response(exc: ConfigValidationError):
         return json_response(
-            {"status": "error", "message": "配置校验失败", "errors": exc.errors},
-            status_code=400,
+            {"saved": False, "message": "配置校验失败", "errors": exc.errors},
         )
 
     async def page_config(self):
@@ -202,8 +219,8 @@ class SetuPlugin(Star):
         if not isinstance(raw_url, str) or not raw_url.strip():
             return error_response("请输入 API 地址", status_code=400)
         started = time.monotonic()
-        session = await self._get_session()
-        result = await self._fetch_url(session, raw_url.strip(), max_size_mb=2, redirects=3, timeout=10)
+        async with self._session_scope() as session:
+            result = await self._fetch_url(session, raw_url.strip(), max_size_mb=2, redirects=3, timeout=10)
         return json_response(
             {
                 "ok": result.ok,
@@ -218,23 +235,44 @@ class SetuPlugin(Star):
 
     # 优化 3: 提供生命周期终止钩子，优雅释放 ClientSession 资源
     def terminate(self):
-        if self._session and not self._session.closed:
-            asyncio.create_task(self._session.close())
+        asyncio.create_task(self._close_session())
+
+    def _get_or_create_session_locked(self, use_ssl: bool) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._ssl_context = ssl.create_default_context()
+            if not use_ssl:
+                self._ssl_context.check_hostname = False
+                self._ssl_context.verify_mode = ssl.CERT_NONE
+
+            connector = aiohttp.TCPConnector(ssl=self._ssl_context)
+            self._session = aiohttp.ClientSession(connector=connector)
+        return self._session
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        async with self._session_lock:
-            if self._session is None or self._session.closed:
-                use_ssl = self.cfg.get("verify_ssl", True)
+        async with self._config_lock:
+            use_ssl = self.cfg.get("verify_ssl", True)
+            async with self._session_lock:
+                return self._get_or_create_session_locked(use_ssl)
 
-                # 优化 1: 移除冗余的三元表达式
-                self._ssl_context = ssl.create_default_context()
-                if not use_ssl:
-                    self._ssl_context.check_hostname = False
-                    self._ssl_context.verify_mode = ssl.CERT_NONE
-
-                connector = aiohttp.TCPConnector(ssl=self._ssl_context)
-                self._session = aiohttp.ClientSession(connector=connector)
-            return self._session
+    @asynccontextmanager
+    async def _session_scope(self):
+        async with self._config_lock:
+            use_ssl = self.cfg.get("verify_ssl", True)
+            async with self._session_lock:
+                session = self._get_or_create_session_locked(use_ssl)
+                session_key = id(session)
+                self._session_users[session_key] = self._session_users.get(session_key, 0) + 1
+        try:
+            yield session
+        finally:
+            async with self._session_lock:
+                remaining = self._session_users.get(session_key, 1) - 1
+                if remaining > 0:
+                    self._session_users[session_key] = remaining
+                else:
+                    self._session_users.pop(session_key, None)
+                    if session_key in self._retired_sessions:
+                        await self._close_retired_session_locked(session_key)
 
     def _text(self, base_text: str) -> str:
         if self.cfg.get("catgirl_enable", False):
@@ -672,11 +710,9 @@ class SetuPlugin(Star):
         max_retries = self.cfg.get("send_retries", 3)
         recall_delay = int(source_cfg.get("recall_delay", 0)) if source_cfg.get("recall_delay") else 0
         
-        session = await self._get_session()
-        
-        if use_forward:
-            return await self._handle_batch_forward(session, event, api_list, count, max_retries, recall_delay)
-        else:
+        async with self._session_scope() as session:
+            if use_forward:
+                return await self._handle_batch_forward(session, event, api_list, count, max_retries, recall_delay)
             return await self._handle_single_send(session, event, api_list, count, max_retries, recall_delay)
 
     async def _handle_batch_forward(self, session: aiohttp.ClientSession, event: AstrMessageEvent, api_list: list[str], count: int, max_retries: int, recall_delay: int) -> bool:
