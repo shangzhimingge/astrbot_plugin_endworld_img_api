@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>随机图片配置中心</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div>
+        <p class="eyebrow">ENDWORLD IMAGE API</p>
+        <h1>随机图片配置中心</h1>
+        <p class="lede">集中管理图源、发送策略和图片处理设置。</p>
+      </div>
+      <div class="hero-actions">
+        <span id="dirtyBadge" class="badge" hidden>有未保存更改</span>
+        <button id="saveTop" class="button primary" type="button">保存全部</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel status-panel" aria-labelledby="statusTitle">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">运行概览</p>
+            <h2 id="statusTitle">当前状态</h2>
+          </div>
+          <button id="refreshStatus" class="button quiet" type="button">刷新</button>
+        </div>
+        <dl id="statusGrid" class="status-grid" aria-live="polite"></dl>
+      </section>
+
+      <section class="panel" aria-labelledby="sourcesTitle">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">图源管理</p>
+            <h2 id="sourcesTitle">触发规则与 API</h2>
+          </div>
+          <button id="addSource" class="button" type="button">添加图源</button>
+        </div>
+        <div id="sources" class="sources"></div>
+      </section>
+
+      <div class="settings-grid">
+        <section class="panel" aria-labelledby="sendingTitle">
+          <p class="section-kicker">发送策略</p>
+          <h2 id="sendingTitle">批量与冷却</h2>
+          <div id="sendingFields" class="field-grid"></div>
+        </section>
+        <section class="panel" aria-labelledby="imageTitle">
+          <p class="section-kicker">图片处理</p>
+          <h2 id="imageTitle">压缩与网络</h2>
+          <div id="imageFields" class="field-grid"></div>
+        </section>
+        <section class="panel" aria-labelledby="textTitle">
+          <p class="section-kicker">文本设置</p>
+          <h2 id="textTitle">回复风格</h2>
+          <div id="textFields" class="field-grid"></div>
+        </section>
+        <section class="panel" aria-labelledby="transferTitle">
+          <p class="section-kicker">备份迁移</p>
+          <h2 id="transferTitle">导入与导出</h2>
+          <p class="muted">导入后先查看变更，再确认应用。文件上限 256 KiB。</p>
+          <div class="transfer-actions">
+            <label class="button file-button">选择 JSON<input id="importFile" type="file" accept="application/json,.json" /></label>
+            <button id="exportConfig" class="button quiet" type="button">导出配置</button>
+          </div>
+        </section>
+      </div>
+
+      <section class="save-bar" aria-label="保存操作">
+        <div>
+          <strong id="saveState">配置尚未修改</strong>
+          <p id="globalMessage" class="muted" role="status" aria-live="polite"></p>
+        </div>
+        <button id="saveBottom" class="button primary" type="button">保存全部</button>
+      </section>
+    </main>
+
+    <dialog id="importDialog" aria-labelledby="importTitle">
+      <form method="dialog" class="dialog-card">
+        <p class="section-kicker">导入预览</p>
+        <h2 id="importTitle">确认这些变更？</h2>
+        <ul id="importChanges" class="change-list"></ul>
+        <div class="dialog-actions">
+          <button value="cancel" class="button quiet">取消</button>
+          <button id="confirmImport" value="default" class="button primary" type="button">确认应用</button>
+        </div>
+      </form>
+    </dialog>
+
+    <template id="emptyListTemplate">
+      <p class="empty-note">暂无项目，使用右侧按钮添加。</p>
+    </template>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
