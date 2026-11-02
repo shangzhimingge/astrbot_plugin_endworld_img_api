@@ -30,7 +30,7 @@ from .webui_config import ConfigValidationError, load_schema, summarize_changes,
 
 
 PLUGIN_NAME = "astrbot_plugin_endworld_img_api"
-PLUGIN_VERSION = "6.6.0"
+PLUGIN_VERSION = "6.6.1"
 IMPORT_LIMIT_BYTES = 256 * 1024
 
 
@@ -244,8 +244,8 @@ class SetuPlugin(Star):
         )
 
     # 优化 3: 提供生命周期终止钩子，优雅释放 ClientSession 资源
-    def terminate(self):
-        asyncio.create_task(self._close_session())
+    async def terminate(self) -> None:
+        await self._close_session()
 
     def _get_or_create_session_locked(self, use_ssl: bool) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:

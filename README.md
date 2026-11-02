@@ -4,7 +4,7 @@
 
 <img src="https://count.getloli.com/@astrbot_plugin_endworld_img_api?name=astrbot_plugin_endworld_img_api&theme=booru-jaypee&padding=7&offset=0&align=center&scale=1&pixelated=0&darkmode=auto" alt="count" />
 
-[![Version](https://img.shields.io/badge/version-v6.6.0-blue.svg)](https://github.com/shangzhimingge/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.24.1-orange.svg)](https://github.com/AstrBotDevs/AstrBot) [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/version-v6.6.1-blue.svg)](https://github.com/shangzhimingge/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.24.1-orange.svg)](https://github.com/AstrBotDevs/AstrBot) [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
 一个为 AstrBot 打造的**高并发、强安全**的自定义 API 随机图片分发插件。
 
@@ -98,6 +98,8 @@ pip install aiofiles aiohttp Pillow
 
 ---
 
+
+> v6.6.1：终止钩子现为异步，直接等待 `_close_session()`，避免等待同步返回值引发 TypeError；在途会话仍按既有机制在请求退出后关闭。
 ## ⚠️ 注意事项 & 法律警告
 
 * **合规声明**：本插件仅作为网络图片 API 的纯净分发与并发工具，不内置任何图源。
@@ -107,7 +109,7 @@ pip install aiofiles aiohttp Pillow
 
 ## 🛠️ 开发维护
 
-* **版本号**：v6.6.0
+* **版本号**：v6.6.1
 * **衍生自**：[mccloud_img](https://github.com/MCYUNIDC/mccloud_img) (Author: MC云)
 * **重构作者**：殇之冥歌
 * **核心依赖**：`AstrBot Core v4.24.1+`

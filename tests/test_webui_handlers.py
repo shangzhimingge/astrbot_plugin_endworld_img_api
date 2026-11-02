@@ -10,6 +10,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+# The real-loopback suite imports this helper by its top-level module name.
+# Keep that name bound to this module when tests are imported as a package.
+sys.modules.setdefault("test_webui_handlers", sys.modules[__name__])
+
 
 class FakeResponse(dict):
     pass
@@ -194,6 +198,76 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.plugin._close_session()
 
+    def test_terminate_is_an_async_lifecycle_hook(self):
+        self.assertTrue(asyncio.iscoroutinefunction(type(self.plugin).terminate))
+
+    async def test_terminate_waits_for_session_cleanup(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        before = set(asyncio.all_tasks())
+
+        async def blocked_cleanup():
+            entered.set()
+            await release.wait()
+
+        with patch.object(self.plugin, "_close_session", side_effect=blocked_cleanup) as cleanup:
+            try:
+                result = self.plugin.terminate()
+                self.assertTrue(asyncio.iscoroutine(result))
+                task = asyncio.create_task(result)
+                await entered.wait()
+                self.assertFalse(task.done())
+                release.set()
+                await task
+                cleanup.assert_awaited_once()
+            finally:
+                release.set()
+                # The old fire-and-forget hook can leave a scheduled cleanup task.
+                await asyncio.sleep(0)
+                pending = [task for task in asyncio.all_tasks() - before if task is not asyncio.current_task()]
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+
+    async def test_terminate_closes_idle_session_and_is_idempotent(self):
+        session = types.SimpleNamespace(closed=False)
+
+        async def close_session():
+            session.closed = True
+
+        session.close = AsyncMock(side_effect=close_session)
+        self.plugin._session = session
+        self.plugin._ssl_context = object()
+
+        await self.plugin.terminate()
+
+        session.close.assert_awaited_once()
+        self.assertIsNone(self.plugin._session)
+        self.assertIsNone(self.plugin._ssl_context)
+        self.assertEqual(self.plugin._retired_sessions, {})
+        self.assertEqual(self.plugin._session_users, {})
+        await self.plugin.terminate()
+
+    async def test_terminate_retires_in_flight_session_until_scope_exits(self):
+        session = types.SimpleNamespace(closed=False)
+
+        async def close_session():
+            session.closed = True
+
+        session.close = AsyncMock(side_effect=close_session)
+        self.plugin._session = session
+        with patch.object(self.plugin, "_get_or_create_session_locked", return_value=session):
+            scope = self.plugin._session_scope()
+            await scope.__aenter__()
+            try:
+                await self.plugin.terminate()
+                self.assertIsNone(self.plugin._session)
+                self.assertIn(id(session), self.plugin._retired_sessions)
+                session.close.assert_not_awaited()
+            finally:
+                await scope.__aexit__(None, None, None)
+        session.close.assert_awaited_once()
+        self.assertTrue(session.closed)
+
     def test_exact_routes_are_registered(self):
         actual = {(route, tuple(methods)) for route, _handler, methods, _desc in self.context.routes}
         prefix = "/astrbot_plugin_endworld_img_api/"
@@ -336,7 +410,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(exported["path"].read_text(encoding="utf-8")), dict(self.config))
         self.plugin.cooldowns["u"] = 1.0
         status = await self.plugin.page_status()
-        self.assertEqual(status["data"]["version"], "6.6.0")
+        self.assertEqual(status["data"]["version"], "6.6.1")
         self.assertEqual(status["data"]["source_count"], len(self.config["sources"]))
         self.assertEqual(status["data"]["cooldown_count"], 1)
 
