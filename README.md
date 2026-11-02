@@ -4,7 +4,7 @@
 
 <img src="https://count.getloli.com/@astrbot_plugin_endworld_img_api?name=astrbot_plugin_endworld_img_api&theme=booru-jaypee&padding=7&offset=0&align=center&scale=1&pixelated=0&darkmode=auto" alt="count" />
 
-[![Version](https://img.shields.io/badge/version-v6.5.1-blue.svg)](https://github.com/shangzhimingge/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.24.1-orange.svg)](https://github.com/AstrBotDevs/AstrBot) [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/version-v6.6.0-blue.svg)](https://github.com/shangzhimingge/astrbot_plugin_endworld_img_api) [![License](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE) [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.24.1-orange.svg)](https://github.com/AstrBotDevs/AstrBot) [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
 一个为 AstrBot 打造的**高并发、强安全**的自定义 API 随机图片分发插件。
 
@@ -16,6 +16,7 @@
 * **⚡ 并发革命与连接池复用**：彻底抛弃阻塞式串行下载。底层采用全局单例 `ClientSession` 维持 TCP 连接池，多图请求由 `asyncio.gather` 并发执行。**现在，获取 10 张图的速度与获取 1 张图完全相同！**
 * **🚀 轮询池架构与防拦截**：支持 `指令 + 空格 + 数量` 批量出图。采用高效的 Round-Robin 算法调度多个图源，遭遇风控或死链时智能无缝切换并重新抽卡。
 * **🛡️ 军工级 SSRF 防御体系**：接管 HTTP `30x` 重定向，原生 `ipaddress` 完美识别各种异形 IP 绕过。同时严格限制 DNS 慢速解析超时，并**完美兼容 Clash/Surge 等代理的 Fake-IP (198.18.x.x) 环境**。
+* **🏠 可选的本地图源访问名单**：管理员可按具体 IP 或 CIDR 放行需要的回环/内网 API；其余内网目标仍按默认规则拦截，重定向和 JSON 图片地址也会重新核验。
 * **🧠 极致性能释放 (拯救主线程)**：所有 CPU 密集型任务（Pillow 图片压缩）均委派至独立线程池 (`asyncio.to_thread`)，彻底告别高并发发图导致的机器人卡顿。内置 `mimetypes` 精准探测文件扩展名。
 * **🎛️ 跨平台底层协议兼容**：完美支持 QQ 平台 (OneBot/NapCat) 的原生合并转发与底层撤回机制，而在 TG/微信 等其他平台也能优雅降级为框架标准发送，真正做到全平台制霸。
 * **👻 完美内存与协程管理**：严苛的惰性缓存清理策略，外加后台任务强引用池设计，彻底杜绝 Python 垃圾回收 (GC) 导致的异步任务意外中断与资源泄漏。
@@ -43,8 +44,8 @@ pip install aiofiles aiohttp Pillow
 在 AstrBot WebUI 中打开“插件”详情，进入本插件的 **settings / 配置中心** Page。该页面可直接完成全部插件配置并同步到运行中的插件：
 
 * **图源管理**：新增、删除和排序图源，编辑触发词、API 地址、群号名单、发送方式与撤回时间。
-* **行内 API 检测**：每个 API 输入框旁都有“检测”按钮；检测使用输入框当前值，无需先保存，并显示 HTTP 状态、内容类型与耗时。
-* **全局设置**：配置批量转发、最大张数、失败重试、冷却、图片压缩、SSL 验证与回复风格。
+* **行内 API 检测**：每个 API 输入框旁都有“检测”按钮；检测使用输入框当前 API 地址，无需先保存，并显示 HTTP 状态、内容类型与耗时。检测使用已保存的本地 IP 放行名单，请先保存名单再检测。
+* **全局设置**：配置批量转发、最大张数、失败重试、冷却、本地 IP 放行名单、图片压缩、SSL 验证与回复风格。
 * **状态概览**：查看插件版本、图源数量、冷却记录、网络会话与最近保存时间。
 * **导入与导出**：导入 UTF-8 JSON 后先显示变更预览，确认后才写入；也可下载当前完整配置。
 * **保存保护**：后端会再次校验所有字段，保存失败时恢复原配置；离开页面前会提示尚未保存的更改。
@@ -52,6 +53,20 @@ pip install aiofiles aiohttp Pillow
 * **稳定编辑体验**：列表增删和图源排序不会折叠已展开卡片；新图源直接删除，已保存图源使用页面内确认对话框。
 
 页面使用中等饱和度蓝粉渐变主题，跟随 AstrBot 的亮色/暗色模式，并适配窄屏与键盘操作。新增 Page 后需重载一次插件；静态页面更新通常刷新即可。
+
+### 允许访问指定的本地图片 API
+
+默认情况下，插件会拦截回环、私有和链路本地 IP。需要调用本地 API 时，在全局设置的 **允许访问的本地 IP / 网段** 中每行添加一个明确目标，支持 IPv4、IPv6 和 CIDR，例如：
+
+```text
+127.0.0.1
+192.168.1.0/24
+::1
+```
+
+只允许名单匹配的目标；域名会解析并逐一核验所有返回地址，因此混有未放行内网地址时整个请求仍会被拦截。重定向和 API 返回的 JSON/文本图片地址也独立核验。修改后先点“保存全部”，再用 API 检测按钮验证。
+
+容器部署时，`127.0.0.1` 指向 **AstrBot 容器自身**，不是 Docker 宿主机或其他容器。访问宿主机或另一个容器的 API，应填写从 AstrBot 所在网络可达的具体服务 IP 或尽量窄的 CIDR。多播和未指定地址始终拦截。只添加你确实需要访问的地址；该名单只扩大匹配地址的访问范围，不会自动信任其他内网 IP。DNS 校验后再连接仍受现有网络解析机制影响，本功能不提供 DNS 绑定/固定解析地址。
 
 ### 1. 添加与管理图源
 
@@ -79,6 +94,7 @@ pip install aiofiles aiohttp Pillow
 | **发送失败重试次数** | `3` | 图片被风控或死链时的“最大换图重试次数”。 |
 | **开启大图自动压缩** | `true` | 是否允许插件在独立线程池中压缩超大图片（防超时）。 |
 | **压缩阈值 / 质量** | `5MB / 85` | 图片大于 5MB 时触发压缩，质量为 85。 |
+| **允许访问的本地 IP / 网段** | `[]` | 每行填写一个 IP 或 CIDR；默认不放行任何本地地址。多播及未指定地址始终拦截。 |
 
 ---
 
@@ -91,7 +107,7 @@ pip install aiofiles aiohttp Pillow
 
 ## 🛠️ 开发维护
 
-* **版本号**：v6.5.1
+* **版本号**：v6.6.0
 * **衍生自**：[mccloud_img](https://github.com/MCYUNIDC/mccloud_img) (Author: MC云)
 * **重构作者**：殇之冥歌
 * **核心依赖**：`AstrBot Core v4.24.1+`

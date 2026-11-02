@@ -2,6 +2,7 @@ import asyncio
 import copy
 import importlib
 import json
+import socket
 import sys
 import tempfile
 import types
@@ -190,6 +191,9 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.config = SaveConfig(default_config())
         self.plugin = main.SetuPlugin(self.context, self.config)
 
+    async def asyncTearDown(self):
+        await self.plugin._close_session()
+
     def test_exact_routes_are_registered(self):
         actual = {(route, tuple(methods)) for route, _handler, methods, _desc in self.context.routes}
         prefix = "/astrbot_plugin_endworld_img_api/"
@@ -214,6 +218,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_config_read_cleans_legacy_keys_and_fills_missing_defaults(self):
         self.config["legacy_field"] = "old"
         self.config.pop("cooldown")
+        self.config.pop("allowed_private_ips")
         self.config["sources"][0]["legacy_source_field"] = "old"
         self.config["sources"][0].pop("group_list")
 
@@ -223,6 +228,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("legacy_field", loaded)
         self.assertNotIn("legacy_source_field", loaded["sources"][0])
         self.assertEqual(loaded["cooldown"], load_schema()["cooldown"]["default"])
+        self.assertEqual(loaded["allowed_private_ips"], [])
         self.assertEqual(loaded["sources"][0]["group_list"], [])
 
     async def test_save_preserves_identity_and_persists_once(self):
@@ -247,6 +253,33 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn("legacy_field", response["data"]["config"])
         self.assertEqual(response["data"]["config"]["cooldown"], load_schema()["cooldown"]["default"])
+
+    async def test_allowlist_save_and_import_round_trip_and_invalid_save_preserves_runtime(self):
+        candidate = default_config()
+        candidate["allowed_private_ips"] = [" 127.0.0.1 ", "192.168.1.10/24"]
+        fake_request.payload = candidate
+        saved = await self.plugin.page_save_config()
+        self.assertEqual(saved["data"]["config"]["allowed_private_ips"], ["127.0.0.1/32", "192.168.1.0/24"])
+
+        export = await self.plugin.page_export_config()
+        self.assertEqual(
+            json.loads(export["path"].read_text(encoding="utf-8"))["allowed_private_ips"],
+            ["127.0.0.1/32", "192.168.1.0/24"],
+        )
+        imported = default_config()
+        imported["allowed_private_ips"] = ["10.1.2.3/8"]
+        fake_request.payload = {"confirm": True, "config": imported}
+        applied = await self.plugin.page_import_config()
+        self.assertEqual(applied["data"]["config"]["allowed_private_ips"], ["10.0.0.0/8"])
+
+        before = copy.deepcopy(self.plugin.cfg)
+        invalid = default_config()
+        invalid["allowed_private_ips"] = ["localhost"]
+        fake_request.payload = invalid
+        rejected = await self.plugin.page_save_config()
+        self.assertFalse(rejected["data"]["saved"])
+        self.assertIn("allowed_private_ips[0]", rejected["data"]["errors"])
+        self.assertEqual(dict(self.plugin.cfg), before)
 
     async def test_save_rolls_back_when_persistence_fails(self):
         failing = SaveConfig(default_config(), fail=True)
@@ -303,7 +336,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(exported["path"].read_text(encoding="utf-8")), dict(self.config))
         self.plugin.cooldowns["u"] = 1.0
         status = await self.plugin.page_status()
-        self.assertEqual(status["data"]["version"], "6.5.1")
+        self.assertEqual(status["data"]["version"], "6.6.0")
         self.assertEqual(status["data"]["source_count"], len(self.config["sources"]))
         self.assertEqual(status["data"]["cooldown_count"], 1)
 
@@ -406,6 +439,78 @@ class FakeSession:
 class FetchTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.plugin = main.SetuPlugin(FakeContext(), SaveConfig(default_config()))
+
+    async def test_private_allowlist_selectively_permits_literals_and_mapped_ipv6(self):
+        self.assertFalse(await self.plugin._is_safe_url("http://127.0.0.1/image"))
+        self.assertFalse(await self.plugin._is_safe_url("http://192.168.2.10/image"))
+        self.assertFalse(await self.plugin._is_safe_url("http://[::1]/image"))
+        self.assertFalse(await self.plugin._is_safe_url("http://[fd00::1]/image"))
+        self.assertFalse(await self.plugin._is_safe_url("http://198.18.0.1/image"))
+        self.plugin.cfg["allowed_private_ips"] = ["127.0.0.0/8", "192.168.1.4/24"]
+        self.assertTrue(await self.plugin._is_safe_url("http://127.0.0.1/image"))
+        self.assertTrue(await self.plugin._is_safe_url("http://192.168.1.99/image"))
+        self.assertTrue(await self.plugin._is_safe_url("http://[::ffff:127.0.0.1]/image"))
+        self.assertFalse(await self.plugin._is_safe_url("http://192.168.2.10/image"))
+        self.assertFalse(await self.plugin._is_safe_url("http://[::1]/image"))
+        self.plugin.cfg["allowed_private_ips"].append("fd00::/8")
+        self.assertTrue(await self.plugin._is_safe_url("http://[fd00::1]/image"))
+        self.assertFalse(await self.plugin._is_safe_url("http://[fc00::1]/image"))
+
+    async def test_private_allowlist_preserves_hard_denies_and_fails_closed_on_bad_runtime_config(self):
+        self.plugin.cfg["allowed_private_ips"] = ["0.0.0.0/0", "::/0"]
+        for url in (
+            "http://0.0.0.0/", "http://224.0.0.1/", "http://[ff02::1]/",
+            "http://[::ffff:224.0.0.1]/", "http://[::ffff:0.0.0.0]/",
+            "http://[fe80::1%25eth0]/", "http://user@127.0.0.1/", "ftp://127.0.0.1/",
+            "http://127.0.0.1:invalid/",
+        ):
+            with self.subTest(url=url):
+                self.assertFalse(await self.plugin._is_safe_url(url))
+        self.plugin.cfg["allowed_private_ips"] = ["127.0.0.0/8", "example.com"]
+        self.assertFalse(await self.plugin._is_safe_url("http://127.0.0.1/"))
+
+    async def test_dns_requires_every_answer_to_be_permitted(self):
+        loop = asyncio.get_running_loop()
+        make_info = lambda address: (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (address, 80))
+        self.plugin.cfg["allowed_private_ips"] = []
+        with patch.object(loop, "getaddrinfo", AsyncMock(return_value=[make_info("127.0.0.1")])):
+            self.assertFalse(await self.plugin._is_safe_url("http://localhost/image"))
+        with patch.object(loop, "getaddrinfo", AsyncMock(return_value=[make_info("93.184.216.34")])):
+            self.assertTrue(await self.plugin._resolve_and_check_domain("example.test"))
+        self.plugin.cfg["allowed_private_ips"] = ["127.0.0.1"]
+        with patch.object(loop, "getaddrinfo", AsyncMock(return_value=[make_info("127.0.0.1")])):
+            self.assertTrue(await self.plugin._resolve_and_check_domain("localhost"))
+        make_v6_info = lambda address: (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (address, 80, 0, 0))
+        self.plugin.cfg["allowed_private_ips"] = ["127.0.0.1", "::1"]
+        with patch.object(loop, "getaddrinfo", AsyncMock(return_value=[make_info("127.0.0.1"), make_v6_info("::1")])):
+            self.assertTrue(await self.plugin._resolve_and_check_domain("localhost"))
+        self.plugin.cfg["allowed_private_ips"] = ["127.0.0.1"]
+        with patch.object(loop, "getaddrinfo", AsyncMock(return_value=[make_info("127.0.0.1"), make_v6_info("::1")])):
+            self.assertFalse(await self.plugin._resolve_and_check_domain("localhost"))
+        with patch.object(loop, "getaddrinfo", AsyncMock(return_value=[make_info("198.18.1.1")])):
+            self.assertTrue(await self.plugin._resolve_and_check_domain("proxy.test"))
+        with patch.object(loop, "getaddrinfo", AsyncMock(return_value=[make_info("198.19.1.1")])):
+            self.assertFalse(await self.plugin._resolve_and_check_domain("proxy.test"))
+        for answers in (
+            [make_info("93.184.216.34"), make_info("192.168.1.5")],
+            [make_info("127.0.0.1"), make_info("127.0.0.2")],
+            [],
+        ):
+            with patch.object(loop, "getaddrinfo", AsyncMock(return_value=answers)):
+                self.assertFalse(await self.plugin._resolve_and_check_domain("example.test"))
+        with patch.object(loop, "getaddrinfo", AsyncMock(side_effect=OSError("DNS error"))):
+            self.assertFalse(await self.plugin._resolve_and_check_domain("example.test"))
+        with patch.object(loop, "getaddrinfo", AsyncMock(side_effect=asyncio.TimeoutError)):
+            self.assertFalse(await self.plugin._resolve_and_check_domain("example.test"))
+
+    async def test_redirect_rechecks_local_allowlist_and_blocks_other_local_targets(self):
+        self.plugin.cfg["allowed_private_ips"] = ["127.0.0.1"]
+        session = FakeSession([
+            FakeHTTPResponse(302, {"Location": "http://127.0.0.2/private"}, url="http://127.0.0.1/start")
+        ])
+        result = await self.plugin._fetch_url(session, "http://127.0.0.1/start")
+        self.assertFalse(result.ok)
+        self.assertEqual(len(session.calls), 1)
 
     async def test_scheme_private_and_redirect_are_revalidated(self):
         session = FakeSession([])

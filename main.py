@@ -30,7 +30,7 @@ from .webui_config import ConfigValidationError, load_schema, summarize_changes,
 
 
 PLUGIN_NAME = "astrbot_plugin_endworld_img_api"
-PLUGIN_VERSION = "6.5.1"
+PLUGIN_VERSION = "6.6.0"
 IMPORT_LIMIT_BYTES = 256 * 1024
 
 
@@ -322,22 +322,70 @@ class SetuPlugin(Star):
         except ValueError:
             return False
 
+    def _allowed_ip_networks(self):
+        """Parse the saved allowlist; malformed legacy/runtime config grants nothing."""
+        raw_networks = self.cfg.get("allowed_private_ips", [])
+        if not isinstance(raw_networks, list):
+            return ()
+        networks = []
+        try:
+            for raw in raw_networks:
+                if not isinstance(raw, str) or not raw.strip() or "%" in raw:
+                    return ()
+                networks.append(ipaddress.ip_network(raw.strip(), strict=False))
+        except ValueError:
+            return ()
+        return tuple(networks)
+
+    @staticmethod
+    def _matches_allowed_network(ip_obj, networks) -> bool:
+        if ip_obj.is_multicast or ip_obj.is_unspecified:
+            return False
+        candidates = [ip_obj]
+        if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped is not None:
+            candidates.append(ip_obj.ipv4_mapped)
+        if any(candidate.is_multicast or candidate.is_unspecified for candidate in candidates):
+            return False
+        return any(
+            network.version == candidate.version and candidate in network
+            for network in networks
+            for candidate in candidates
+        )
+
+    def _is_allowed_destination(self, ip_str: str | int, networks, *, allow_fake_ip: bool = False) -> bool:
+        try:
+            ip_obj = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False
+        candidates = [ip_obj]
+        if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped is not None:
+            candidates.append(ip_obj.ipv4_mapped)
+        # Multicast and unspecified destinations are never useful image endpoints.
+        if any(candidate.is_multicast or candidate.is_unspecified for candidate in candidates):
+            return False
+        # Preserve the existing DNS-only 198.18.* Fake-IP exception exactly.
+        if allow_fake_ip and ip_obj.version == 4 and str(ip_obj).startswith("198.18."):
+            return True
+        if self._matches_allowed_network(ip_obj, networks):
+            return True
+        return not any(self._is_private_ip(candidate) for candidate in candidates)
+
     async def _resolve_and_check_domain(self, hostname: str) -> bool:
         try:
+            networks = self._allowed_ip_networks()
             loop = asyncio.get_running_loop()
             # 优化 5: 增加超时控制，防止慢速 DNS 放大攻击阻塞主协程
             infos = await asyncio.wait_for(
                 loop.getaddrinfo(hostname, 80, family=0, type=socket.SOCK_STREAM),
                 timeout=5.0
             )
+            if not infos:
+                logger.warning(f"[随机图片] 域名未解析到地址: {hostname}")
+                return False
             for info in infos:
                 resolved_ip = info[4][0]
-                
-                # 放行 Clash/Surge 等产生的 Fake-IP 网段 (198.18.x.x)
-                if str(resolved_ip).startswith('198.18.'):
-                    continue
-                    
-                if self._is_private_ip(resolved_ip):
+
+                if not self._is_allowed_destination(resolved_ip, networks, allow_fake_ip=True):
                     logger.warning(f"[随机图片] SSRF拦截: 域名 {hostname} 解析出危险内部 IP: {resolved_ip}")
                     return False
             return True
@@ -353,19 +401,22 @@ class SetuPlugin(Star):
             parsed = urlparse(url)
             if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
                 return False
+            try:
+                parsed.port
+            except ValueError:
+                return False
             hostname = parsed.hostname
             if not hostname: 
                 return False
-                
-            forbidden_hosts = ['localhost', '::1', '0.0.0.0']
-            if hostname in forbidden_hosts:
+            # Scoped IPv6 authorities are ambiguous across interfaces; keep them blocked.
+            if "%" in hostname:
                 return False
 
             # 判断是否直接为 IP（兼容十进制/十六进制）
             try:
                 ip_to_check = int(hostname) if hostname.isdigit() else hostname
-                ipaddress.ip_address(ip_to_check)
-                return not self._is_private_ip(ip_to_check)
+                ip_obj = ipaddress.ip_address(ip_to_check)
+                return self._is_allowed_destination(ip_obj, self._allowed_ip_networks())
             except ValueError:
                 pass 
                 

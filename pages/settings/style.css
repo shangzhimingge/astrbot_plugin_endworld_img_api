@@ -145,7 +145,7 @@ main { display: grid; gap: 20px; padding-bottom: 48px; }
 .field.full { grid-column: 1 / -1; }
 .field-label, .list-title { font-weight: 750; }
 .field-hint { margin: 0; color: var(--muted); font-size: 0.82rem; }
-input[type="text"], input[type="number"], select {
+input[type="text"], input[type="number"], select, textarea {
   width: 100%;
   min-height: 43px;
   border: 1px solid var(--line);
@@ -154,7 +154,8 @@ input[type="text"], input[type="number"], select {
   background: var(--surface-strong);
   color: var(--text);
 }
-input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--danger); }
+textarea { min-height: 96px; resize: vertical; font: inherit; line-height: 1.45; }
+input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--danger); }
 .error-text { min-height: 1.2em; margin: 0; color: var(--danger); font-size: 0.8rem; }
 .switch { display: flex; gap: 10px; align-items: center; min-height: 43px; }
 .switch input { width: 20px; height: 20px; accent-color: var(--accent); }

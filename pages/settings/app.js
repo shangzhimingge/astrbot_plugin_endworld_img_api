@@ -108,7 +108,13 @@ function createTopField(key, rule) {
   const wrapper = node("div", `field${key === "catgirl_suffix" ? " full" : ""}`);
   const label = node("label", "field-label", rule.description || key);
   let control;
-  if (rule.type === "bool") {
+  if (rule.type === "list") {
+    control = document.createElement("textarea");
+    control.rows = 4;
+    control.value = Array.isArray(state.draft[key]) ? state.draft[key].join("\n") : "";
+    label.htmlFor = `field-${key}`;
+    control.id = `field-${key}`;
+  } else if (rule.type === "bool") {
     label.className = "switch";
     control = document.createElement("input");
     control.type = "checkbox";
@@ -125,7 +131,9 @@ function createTopField(key, rule) {
   }
   control.dataset.path = key;
   control.addEventListener("input", () => {
-    state.draft[key] = rule.type === "bool" ? control.checked : rule.type === "int" ? Number(control.value) : control.value;
+    state.draft[key] = rule.type === "list"
+      ? control.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)
+      : rule.type === "bool" ? control.checked : rule.type === "int" ? Number(control.value) : control.value;
     changed();
   });
   if (rule.type === "bool") wrapper.append(label);
@@ -139,7 +147,7 @@ function renderTopFields() {
   state.controls.clear();
   const groups = {
     sendingFields: ["batch_force_forward", "batch_forward_threshold", "batch_max_count", "send_retries", "cooldown"],
-    imageFields: ["compress_enable", "compress_threshold", "compress_quality", "verify_ssl"],
+    imageFields: ["compress_enable", "compress_threshold", "compress_quality", "verify_ssl", "allowed_private_ips"],
     textFields: ["catgirl_enable", "catgirl_suffix"],
   };
   for (const [containerId, keys] of Object.entries(groups)) {

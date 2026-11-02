@@ -84,6 +84,34 @@ class WebUIConfigTests(unittest.TestCase):
 
         self.assertNotIn("mutated", second["sources"][0]["keywords"])
 
+    def test_allowed_private_ips_default_and_canonicalize_without_mutating_input(self):
+        self.assertEqual(validate_and_normalize({}, self.schema)["allowed_private_ips"], [])
+        candidate = copy.deepcopy(self.valid)
+        candidate["allowed_private_ips"] = [" 127.0.0.1 ", "192.168.1.4/24", "127.0.0.1"]
+        original = copy.deepcopy(candidate)
+
+        result = validate_and_normalize(candidate, self.schema)
+
+        self.assertEqual(result["allowed_private_ips"], ["127.0.0.1/32", "192.168.1.0/24"])
+        self.assertEqual(candidate, original)
+
+    def test_allowed_private_ips_rejects_non_string_invalid_and_scoped_values_by_index(self):
+        invalid_values = [
+            ["example.com"], ["http://127.0.0.1"], ["127.0.0.1:80"], ["0x7f000001"],
+            ["127.0.0.1%eth0"], [True], [123], "127.0.0.1",
+        ]
+        for value in invalid_values:
+            candidate = copy.deepcopy(self.valid)
+            candidate["allowed_private_ips"] = value
+            with self.subTest(value=value), self.assertRaises(ConfigValidationError) as caught:
+                validate_and_normalize(candidate, self.schema)
+            self.assertTrue(
+                any(path == "allowed_private_ips" or path.startswith("allowed_private_ips[")
+                    for path in caught.exception.errors)
+            )
+            if isinstance(value, list):
+                self.assertIn("allowed_private_ips[0]", caught.exception.errors)
+
     def test_bool_does_not_pass_as_int_and_ranges_apply(self):
         invalid = (("cooldown", True), ("compress_quality", 0), ("compress_quality", 101))
         for field, value in invalid:

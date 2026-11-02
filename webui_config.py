@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import ipaddress
 import json
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,19 @@ def _validate_scalar(value: Any, rule: dict[str, Any], path: str, errors: dict[s
         normalized = []
         for index, item in enumerate(value):
             item_path = f"{path}[{index}]"
+            if rule.get("format") == "ip_network":
+                if not isinstance(item, str) or not item.strip() or "%" in item:
+                    errors[item_path] = "必须是 IPv4/IPv6 地址或 CIDR 网段"
+                    continue
+                try:
+                    network = ipaddress.ip_network(item.strip(), strict=False)
+                except ValueError:
+                    errors[item_path] = "必须是有效的 IPv4/IPv6 地址或 CIDR 网段"
+                    continue
+                canonical = str(network)
+                if canonical not in normalized:
+                    normalized.append(canonical)
+                continue
             if not isinstance(item, (str, int)) or isinstance(item, bool):
                 errors[item_path] = "必须是字符串或整数"
                 continue

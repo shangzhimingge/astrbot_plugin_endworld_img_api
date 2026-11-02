@@ -1,4 +1,11 @@
 {
+    "allowed_private_ips": {
+        "type": "list",
+        "format": "ip_network",
+        "description": "允许访问的本地 IP / 网段",
+        "hint": "每行填写一个 IPv4、IPv6 或 CIDR，例如 127.0.0.1、192.168.1.0/24、::1。仅放行匹配地址；多播和未指定地址始终拦截。保存后 API 检测才会使用此名单。",
+        "default": []
+    },
     "sources": {
         "type": "template_list",
         "description": "图源配置列表",
